@@ -25,6 +25,10 @@ plumber_app aims at that gap:
 | [06 – Integrations](docs/06-integrations.md) | CRM strategy, inventory/suppliers, accounting, architecture |
 | [07 – Roadmap](docs/07-roadmap.md) | Phased delivery plan and open questions |
 
+## Application
+
+The working application lives in [`web/`](web/) — Next.js 14 + PostgreSQL (Drizzle ORM) + Tailwind, with all four role experiences, RBAC, and seeded demo data. See [web/README.md](web/README.md) for setup, demo accounts, and architecture notes.
+
 ## Status
 
-Pre-development. The docs above are the product spec derived from market research (July 2026); implementation stack and architecture decisions are tracked in the roadmap's open questions.
+Demo-ready build implementing Phases 1–2 of the spec (external services stubbed behind the integrations hub). The docs above are the product spec derived from market research (July 2026); remaining open questions live in the roadmap.

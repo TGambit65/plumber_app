@@ -1,0 +1,70 @@
+# plumber_app — web
+
+The plumber_app application: a field-service platform for plumbing companies with four role-based experiences (Field Tech, Sales/PM, Office, Admin/Owner). Built per the product spec in [`../docs`](../docs).
+
+## Stack
+
+- **Next.js 14** (App Router, server components + server actions, TypeScript)
+- **PostgreSQL** with **Drizzle ORM** (pure-TS, migrations in `drizzle/`)
+- **Tailwind CSS** with a small in-repo UI kit (`src/components/ui.tsx`)
+- Cookie-session auth (jose JWT, bcrypt passwords), granular RBAC (`src/lib/permissions.ts`)
+- **Vitest** unit tests, Playwright smoke-tour script (`scripts/screenshot-tour.mjs`)
+
+## Getting started
+
+```bash
+# 1. Postgres — any instance works; create a database
+createdb plumber_app
+
+# 2. Configure
+cp .env.example .env   # set DATABASE_URL + a strong SESSION_SECRET
+
+# 3. Install, migrate, seed
+npm install
+npm run db:push        # apply schema (drizzle-kit)
+npm run db:seed        # realistic demo data + demo accounts
+
+# 4. Run
+npm run dev            # http://localhost:3000
+```
+
+### Demo accounts (password `demo1234`)
+
+| Email | Role | Lands on |
+|---|---|---|
+| `owner@apexplumbing.demo` | Admin / Owner | `/dashboard` |
+| `office@apexplumbing.demo` | Office / Dispatch | `/dispatch` |
+| `sales@apexplumbing.demo` | Sales / Project Manager | `/cockpit` |
+| `tech@apexplumbing.demo` | Field Technician | `/my-day` (mobile-first) |
+
+## What's implemented
+
+**Field tech (mobile-first):** My Day route with status-advance flow (auto "on my way" texts, auto time entries), job detail with property memory + equipment history, photo checklists, required forms, truck-stock consumption, part requests, tech lead-flagging with spiffs, and the guided **two-minute closeout** (photos → forms → AI-draft summary → invoice → sign → pay → review request).
+
+**Sales/PM:** sales cockpit (follow-ups due, hot signals, SLA timers, pipeline, live commission), unified lead inbox with source attribution + speed-to-lead SLAs, kanban pipeline, **good-better-best estimates** with monthly-financing framing, e-sign approval (auto job + commission creation), default-on 7-day follow-up sequences, and projects with milestones, progress billing, e-signed change orders, permits/inspections (with completion blocking), budget vs. actuals, and subcontractor COI tracking.
+
+**Office:** dispatch board with unassigned lane + booking flow, all-jobs list, customer 360 (timeline, property memory editing), invoices/AR with aging sweep + payment capture.
+
+**Admin/Owner:** company dashboard (revenue, close rate, scoreboards, AR aging), settings (team management, **integrations hub** with CRM/accounting/supplier connector stubs, commission rules + approvals, audit log), price book with margin guardrails, company-wide commissions.
+
+**Shared:** knowledge base with search + markdown SOPs + verification workflow, inventory (warehouse + truck-as-warehouse, min/max replenishment → auto-PO, receiving), global search, notifications, full audit logging.
+
+## Scripts
+
+| Command | Purpose |
+|---|---|
+| `npm run dev` / `build` / `start` | Next.js lifecycle |
+| `npm run db:push` | Apply schema to `DATABASE_URL` |
+| `npm run db:generate` | Generate SQL migration files |
+| `npm run db:seed` | Reset + seed demo data (destructive) |
+| `npm test` | Vitest unit tests |
+| `node scripts/screenshot-tour.mjs` | Authenticated smoke tour + screenshots (needs `npm run start` + Playwright) |
+
+## Architecture notes
+
+- **Money is integer cents** everywhere; format at the edge with `money()`.
+- **Server components fetch, server actions mutate** — no client data fetching; forms work without JS (progressive enhancement).
+- **RBAC**: granular permissions bundled into four roles; `can(role, permission)` guards every sensitive action server-side; scoped "own vs all" reads are enforced in queries.
+- **Audit + timeline**: sensitive mutations write `audit_logs`; customer-facing events write `activities` (the per-customer unified timeline).
+- **Integrations** are deliberately stubbed behind the `integration_connections` table + hub UI — the sync architecture (webhook-first, identity map, field-of-record policy) is specified in [`../docs/06-integrations.md`](../docs/06-integrations.md) and slots in without schema changes.
+- **Offline-first mobile** is Phase-1-groundwork only in this web build (mobile-first layouts, big tap targets); the local-first sync layer is specified in [`../docs/04-field-tech-requirements.md`](../docs/04-field-tech-requirements.md).

@@ -1,0 +1,303 @@
+import Link from "next/link";
+import { db, t } from "@/db";
+import { and, asc, eq, gte, isNull, lt, notInArray, or } from "drizzle-orm";
+import { requireSession } from "@/lib/auth";
+import { can } from "@/lib/permissions";
+import { assignJob, bookJob } from "@/lib/actions/office";
+import {
+  Avatar,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  Field,
+  Input,
+  PageHeader,
+  Select,
+  Stat,
+  Textarea,
+  buttonClass,
+  jobStatusTone,
+  statusLabel,
+} from "@/components/ui";
+import { DispatchJobCard, priorityTone } from "@/components/office/job-card";
+import { fmtDate } from "@/lib/format";
+
+export const dynamic = "force-dynamic";
+
+function toDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function parseDateParam(raw: string | undefined): Date {
+  if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [y, m, d] = raw.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
+const LEGEND: { status: string; label: string }[] = [
+  "UNSCHEDULED",
+  "SCHEDULED",
+  "DISPATCHED",
+  "EN_ROUTE",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "CANCELLED",
+].map((s) => ({ status: s, label: statusLabel(s) }));
+
+export default async function DispatchPage({ searchParams }: { searchParams: { date?: string } }) {
+  const session = await requireSession();
+  if (!can(session.role, "schedule.view.all")) {
+    return (
+      <Card>
+        <CardBody>
+          <EmptyState title="403 — You don't have access to the dispatch board" hint="Ask an admin if you believe this is a mistake." />
+        </CardBody>
+      </Card>
+    );
+  }
+  const canManage = can(session.role, "dispatch.manage");
+
+  const day = parseDateParam(searchParams.date);
+  const dayEnd = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+  const dateStr = toDateStr(day);
+  const prevStr = toDateStr(new Date(day.getFullYear(), day.getMonth(), day.getDate() - 1));
+  const nextStr = toDateStr(new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1));
+  const isToday = dateStr === toDateStr(new Date());
+
+  const [techs, dayJobs, unassigned, emergencies, customers, properties] = await Promise.all([
+    db.query.users.findMany({
+      where: and(eq(t.users.role, "TECH"), eq(t.users.active, true)),
+      with: { truck: true },
+      orderBy: asc(t.users.name),
+    }),
+    db.query.jobs.findMany({
+      where: and(gte(t.jobs.scheduledAt, day), lt(t.jobs.scheduledAt, dayEnd)),
+      with: { customer: true, property: true },
+      orderBy: asc(t.jobs.scheduledAt),
+    }),
+    db.query.jobs.findMany({
+      where: and(
+        or(eq(t.jobs.status, "UNSCHEDULED"), isNull(t.jobs.assignedToId)),
+        notInArray(t.jobs.status, ["COMPLETED", "CANCELLED"])
+      ),
+      with: { customer: true, property: true },
+      orderBy: asc(t.jobs.createdAt),
+    }),
+    db.query.jobs.findMany({
+      where: and(eq(t.jobs.priority, "EMERGENCY"), notInArray(t.jobs.status, ["COMPLETED", "CANCELLED"])),
+      columns: { id: true },
+    }),
+    db.query.customers.findMany({ orderBy: asc(t.customers.name) }),
+    db.query.properties.findMany({ with: { customer: true }, orderBy: asc(t.properties.address) }),
+  ]);
+
+  const statusCounts = dayJobs.reduce<Record<string, number>>((acc, j) => {
+    acc[j.status] = (acc[j.status] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <div>
+      <PageHeader
+        title="Dispatch board"
+        subtitle={`${fmtDate(day)}${isToday ? " · today" : ""}`}
+        action={
+          <div className="flex items-center gap-2">
+            <Link href={`/dispatch?date=${prevStr}`} className={buttonClass("secondary", "sm")}>
+              ← Prev
+            </Link>
+            {!isToday ? (
+              <Link href="/dispatch" className={buttonClass("secondary", "sm")}>
+                Today
+              </Link>
+            ) : null}
+            <Link href={`/dispatch?date=${nextStr}`} className={buttonClass("secondary", "sm")}>
+              Next →
+            </Link>
+          </div>
+        }
+      />
+
+      {/* Stat row */}
+      <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-5">
+        <Stat label="Jobs on board" value={dayJobs.length} hint={fmtDate(day)} />
+        <Stat label="Scheduled" value={statusCounts["SCHEDULED"] ?? 0} />
+        <Stat
+          label="In the field"
+          value={(statusCounts["DISPATCHED"] ?? 0) + (statusCounts["EN_ROUTE"] ?? 0) + (statusCounts["IN_PROGRESS"] ?? 0)}
+          hint="dispatched · en route · in progress"
+        />
+        <Stat label="Completed" value={statusCounts["COMPLETED"] ?? 0} tone="good" />
+        <Stat label="Emergencies open" value={emergencies.length} tone={emergencies.length > 0 ? "bad" : "default"} />
+      </div>
+
+      {/* Legend */}
+      <div className="mb-4 flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 text-xs font-medium uppercase tracking-wide text-slate-500">Status legend</span>
+        {LEGEND.map((l) => (
+          <Badge key={l.status} tone={jobStatusTone[l.status]}>
+            {l.label}
+          </Badge>
+        ))}
+      </div>
+
+      {/* Board: unassigned lane + one column per tech */}
+      <div className="mb-6 grid gap-4" style={{ gridTemplateColumns: `repeat(${techs.length + 1}, minmax(240px, 1fr))` }}>
+        {/* Unassigned lane */}
+        <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50/40 p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-amber-900">Unassigned</h2>
+            <Badge tone="amber">{unassigned.length}</Badge>
+          </div>
+          <div className="space-y-2">
+            {unassigned.length === 0 ? (
+              <EmptyState title="Nothing waiting" hint="All jobs are assigned and scheduled." />
+            ) : (
+              unassigned.map((job) => (
+                <div key={job.id} className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <Link href={`/jobs/${job.id}`} className="text-sm font-medium text-blue-700 hover:underline">
+                      {job.number} · {job.jobType}
+                    </Link>
+                    <Badge tone={priorityTone[job.priority]}>{statusLabel(job.priority)}</Badge>
+                  </div>
+                  <p className="mt-0.5 text-xs text-slate-600">{job.customer.name}</p>
+                  <p className="text-xs text-slate-400">
+                    {job.property.address}, {job.property.city}
+                  </p>
+                  {canManage ? (
+                    <form action={assignJob} className="mt-2 space-y-1.5">
+                      <input type="hidden" name="jobId" value={job.id} />
+                      <Select name="techId" required defaultValue="" aria-label="Assign technician" className="h-8 text-xs">
+                        <option value="" disabled>
+                          Choose tech…
+                        </option>
+                        {techs.map((tech) => (
+                          <option key={tech.id} value={tech.id}>
+                            {tech.name}
+                          </option>
+                        ))}
+                      </Select>
+                      <div className="flex gap-1.5">
+                        <Input
+                          type="datetime-local"
+                          name="scheduledAt"
+                          required
+                          defaultValue={`${dateStr}T09:00`}
+                          aria-label="Scheduled time"
+                          className="h-8 text-xs"
+                        />
+                        <Button type="submit" size="sm">
+                          Assign
+                        </Button>
+                      </div>
+                    </form>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Tech columns */}
+        {techs.map((tech) => {
+          const jobsForTech = dayJobs.filter((j) => j.assignedToId === tech.id);
+          return (
+            <div key={tech.id} className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <Avatar name={tech.name} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold text-slate-800">{tech.name}</div>
+                  <div className="truncate text-xs text-slate-500">{tech.truck ? `🚚 ${tech.truck.name}` : "No truck assigned"}</div>
+                </div>
+                <Badge tone="blue">{jobsForTech.length}</Badge>
+              </div>
+              <div className="space-y-2">
+                {jobsForTech.length === 0 ? (
+                  <EmptyState title="No jobs this day" hint="Assign from the unassigned lane." />
+                ) : (
+                  jobsForTech.map((job) => <DispatchJobCard key={job.id} job={job} />)
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Book job */}
+      {canManage ? (
+        <Card>
+          <CardHeader title="Book a job" subtitle="Creates the job immediately — scheduled if you pick a time, otherwise it lands in the unassigned lane." />
+          <CardBody>
+            <form action={bookJob} className="grid gap-3 md:grid-cols-3">
+              <Field label="Customer">
+                <Select name="customerId" required defaultValue="">
+                  <option value="" disabled>
+                    Select customer…
+                  </option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                      {c.company ? ` (${c.company})` : ""}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Property (must belong to the customer)">
+                <Select name="propertyId" required defaultValue="">
+                  <option value="" disabled>
+                    Select property…
+                  </option>
+                  {properties.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.customer.name} — {p.label ? `${p.label}, ` : ""}
+                      {p.address}, {p.city}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Job type">
+                <Input name="jobType" required placeholder="e.g. Water Heater Replacement" />
+              </Field>
+              <Field label="Priority">
+                <Select name="priority" defaultValue="NORMAL">
+                  <option value="LOW">Low</option>
+                  <option value="NORMAL">Normal</option>
+                  <option value="HIGH">High</option>
+                  <option value="EMERGENCY">Emergency</option>
+                </Select>
+              </Field>
+              <Field label="Schedule (optional)">
+                <Input type="datetime-local" name="scheduledAt" />
+              </Field>
+              <Field label="Assign tech (optional)">
+                <Select name="techId" defaultValue="">
+                  <option value="">Unassigned</option>
+                  {techs.map((tech) => (
+                    <option key={tech.id} value={tech.id}>
+                      {tech.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <div className="md:col-span-3">
+                <Field label="Description">
+                  <Textarea name="description" rows={2} placeholder="What's going on at the property?" />
+                </Field>
+              </div>
+              <div className="md:col-span-3">
+                <Button type="submit">Book job</Button>
+              </div>
+            </form>
+          </CardBody>
+        </Card>
+      ) : null}
+    </div>
+  );
+}
