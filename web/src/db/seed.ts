@@ -510,6 +510,29 @@ async function main() {
     { provider: "FERGUSON", status: "ERROR", lastSyncAt: daysFromNow(-2), config: { note: "Punchout session expired — reconnect" } },
     { provider: "GOOGLE_LSA", status: "CONNECTED", lastSyncAt: daysFromNow(0, 8) },
     { provider: "ANGI", status: "CONNECTED", lastSyncAt: daysFromNow(0, 8) },
+    { provider: "ORGMEMORY", status: "DISCONNECTED", config: { namespace: "plumber_app" } },
+  ]);
+
+  console.log("Messages…");
+  const [conv1, conv2] = await db
+    .insert(t.conversations)
+    .values([
+      { isGroup: false, createdById: office.id, lastMessageAt: daysFromNow(0, 8, 15) },
+      { title: "Lakeview Bldg A crew", isGroup: true, createdById: sales2.id, lastMessageAt: daysFromNow(0, 7, 50) },
+    ])
+    .returning();
+  await db.insert(t.conversationParticipants).values([
+    { conversationId: conv1.id, userId: office.id, lastReadAt: daysFromNow(0, 8, 15) },
+    { conversationId: conv1.id, userId: tech.id, lastReadAt: daysFromNow(-1) }, // tech has unread
+    { conversationId: conv2.id, userId: sales2.id, lastReadAt: daysFromNow(0, 7, 50) },
+    { conversationId: conv2.id, userId: tech.id, lastReadAt: daysFromNow(-1) },
+    { conversationId: conv2.id, userId: admin.id, lastReadAt: daysFromNow(0, 7, 55) },
+  ]);
+  await db.insert(t.messages).values([
+    { conversationId: conv1.id, senderId: office.id, body: "Hey Jake — Boyd water heater is approved, you're dispatched for 8:30. Gate code's on the property record.", createdAt: daysFromNow(0, 8, 10) },
+    { conversationId: conv1.id, senderId: office.id, body: "Also, customer mentioned a dog — friendly per the notes. 🐶", createdAt: daysFromNow(0, 8, 15) },
+    { conversationId: conv2.id, senderId: sales2.id, body: "Team — abatement CO-02 is out for signature. Hold floor 1-2 riser work until it's signed.", createdAt: daysFromNow(0, 7, 45) },
+    { conversationId: conv2.id, senderId: admin.id, body: "Good call. I'll ping the PM at Lakeview this morning.", createdAt: daysFromNow(0, 7, 50) },
   ]);
 
   console.log("Audit log…");

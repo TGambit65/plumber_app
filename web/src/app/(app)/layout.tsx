@@ -2,9 +2,10 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireSession, destroySession } from "@/lib/auth";
 import { ROLE_LABELS } from "@/lib/permissions";
-import { NAV } from "@/lib/nav";
+import { navForUser } from "@/lib/nav";
+import { effectivePermissions } from "@/lib/effective-permissions";
 import { db, t } from "@/db";
-import { and, eq, isNull, desc } from "drizzle-orm";
+import { and, eq, isNull, desc, inArray, ne } from "drizzle-orm";
 import { Avatar } from "@/components/ui";
 import { NavLinks, MobileNav } from "@/components/nav-links";
 import { NotificationsBell } from "@/components/notifications-bell";
@@ -18,7 +19,8 @@ async function logout() {
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await requireSession();
-  const nav = NAV[session.role];
+  const perms = await effectivePermissions(session.userId, session.role);
+  const nav = navForUser(session.role, perms);
 
   const unread = await db
     .select({ id: t.notifications.id, title: t.notifications.title, body: t.notifications.body, href: t.notifications.href, createdAt: t.notifications.createdAt })
@@ -26,6 +28,29 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     .where(and(eq(t.notifications.userId, session.userId), isNull(t.notifications.readAt)))
     .orderBy(desc(t.notifications.createdAt))
     .limit(10);
+
+  // Unread message count for the Messages nav badge.
+  const myConvos = await db
+    .select({ conversationId: t.conversationParticipants.conversationId, lastReadAt: t.conversationParticipants.lastReadAt })
+    .from(t.conversationParticipants)
+    .where(eq(t.conversationParticipants.userId, session.userId));
+  let unreadMessages = 0;
+  if (myConvos.length > 0) {
+    const msgs = await db
+      .select({ conversationId: t.messages.conversationId, createdAt: t.messages.createdAt, senderId: t.messages.senderId })
+      .from(t.messages)
+      .where(
+        and(
+          inArray(
+            t.messages.conversationId,
+            myConvos.map((c) => c.conversationId)
+          ),
+          ne(t.messages.senderId, session.userId)
+        )
+      );
+    const lastRead = new Map(myConvos.map((c) => [c.conversationId, c.lastReadAt?.getTime() ?? 0]));
+    unreadMessages = msgs.filter((m) => m.createdAt.getTime() > (lastRead.get(m.conversationId) ?? 0)).length;
+  }
 
   return (
     <div className="flex min-h-screen">
@@ -39,7 +64,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </div>
         </div>
         <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
-          <NavLinks items={nav} />
+          <NavLinks items={nav} badges={{ "/messages": unreadMessages }} />
         </nav>
         <div className="border-t border-slate-800 p-3">
           <div className="flex items-center gap-2">
@@ -78,7 +103,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <main className="flex-1 p-4 pb-24 md:p-6 md:pb-6">{children}</main>
 
         {/* Mobile bottom nav — thumb-zone, ≥48px targets */}
-        <MobileNav items={nav.slice(0, 5)} />
+        <MobileNav items={nav.slice(0, 5)} badges={{ "/messages": unreadMessages }} />
       </div>
     </div>
   );

@@ -699,3 +699,70 @@ export const activitiesRelations = relations(activities, ({ one }) => ({
 export const notificationsRelations = relations(notifications, ({ one }) => ({
   user: one(users, { fields: [notifications.userId], references: [users.id] }),
 }));
+
+// ── Per-user permission overrides ────────────────────────────────────────────
+// Effective permissions = role bundle + granted overrides − revoked overrides.
+export const userPermissionOverrides = pgTable(
+  "user_permission_overrides",
+  {
+    id: id(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    permission: text("permission").notNull(),
+    granted: boolean("granted").notNull(), // true = add, false = revoke
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (tb) => ({
+    userPerm: uniqueIndex("user_permission_overrides_user_perm_idx").on(tb.userId, tb.permission),
+  })
+);
+
+export const userPermissionOverridesRelations = relations(userPermissionOverrides, ({ one }) => ({
+  user: one(users, { fields: [userPermissionOverrides.userId], references: [users.id] }),
+}));
+
+// ── In-app messaging ─────────────────────────────────────────────────────────
+export const conversations = pgTable("conversations", {
+  id: id(),
+  title: text("title"), // null for 1:1 (derived from participants); set for groups
+  isGroup: boolean("is_group").notNull().default(false),
+  createdById: text("created_by_id").references(() => users.id),
+  lastMessageAt: timestamp("last_message_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const conversationParticipants = pgTable(
+  "conversation_participants",
+  {
+    id: id(),
+    conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    lastReadAt: timestamp("last_read_at", { withTimezone: true }),
+  },
+  (tb) => ({
+    convUser: uniqueIndex("conversation_participants_conv_user_idx").on(tb.conversationId, tb.userId),
+  })
+);
+
+export const messages = pgTable("messages", {
+  id: id(),
+  conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  senderId: text("sender_id").notNull().references(() => users.id),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const conversationsRelations = relations(conversations, ({ many, one }) => ({
+  participants: many(conversationParticipants),
+  messages: many(messages),
+  createdBy: one(users, { fields: [conversations.createdById], references: [users.id] }),
+}));
+
+export const conversationParticipantsRelations = relations(conversationParticipants, ({ one }) => ({
+  conversation: one(conversations, { fields: [conversationParticipants.conversationId], references: [conversations.id] }),
+  user: one(users, { fields: [conversationParticipants.userId], references: [users.id] }),
+}));
+
+export const messagesRelations = relations(messages, ({ one }) => ({
+  conversation: one(conversations, { fields: [messages.conversationId], references: [conversations.id] }),
+  sender: one(users, { fields: [messages.senderId], references: [users.id] }),
+}));

@@ -45,9 +45,13 @@ npm run dev            # http://localhost:3000
 
 **Office:** dispatch board with unassigned lane + booking flow, all-jobs list, customer 360 (timeline, property memory editing), invoices/AR with aging sweep + payment capture.
 
-**Admin/Owner:** company dashboard (revenue, close rate, scoreboards, AR aging), settings (team management, **integrations hub** with CRM/accounting/supplier connector stubs, commission rules + approvals, audit log), price book with margin guardrails, company-wide commissions.
+**Admin/Owner:** company dashboard (revenue, close rate, scoreboards, AR aging), settings (team management, **integrations hub** with CRM/accounting/supplier connector stubs, commission rules + approvals, audit log), price book with margin guardrails, company-wide commissions. Full team administration: change a user's role, **grant/revoke individual permissions on top of their role** (per-user overrides), and **deactivate a user with one-step reassignment** of their open jobs, leads, and estimates to another user.
 
-**Shared:** knowledge base with search + markdown SOPs + verification workflow, inventory (warehouse + truck-as-warehouse, min/max replenishment → auto-PO, receiving), global search, notifications, full audit logging.
+**Shared:** knowledge base with search + markdown SOPs + verification workflow, **in-app messaging** (1:1 and group threads between any users, unread badges in the nav), inventory (warehouse + truck-as-warehouse, min/max replenishment → auto-PO, receiving), global search, notifications, full audit logging.
+
+### Company knowledge base & OrgMemory
+
+The knowledge base runs behind a pluggable `KnowledgeStore` interface (`src/lib/knowledge/`). By default it uses local Postgres keyword search. When **OrgMemory** (the on-prem MCP-native memory substrate) is connected in Settings → Integrations, the KB switches to semantic search over OrgMemory's gateway and **mirrors every authored SOP into OrgMemory** on save (mirror-both-ways). The adapter targets OrgMemory's MCP-over-HTTP `tools/call` surface (`memory.search`, `document.ingest`) with JWT auth, and gracefully falls back to local keyword search whenever the gateway is unreachable — so the KB never hard-fails while OrgMemory is still pre-MVP.
 
 ## Scripts
 

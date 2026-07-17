@@ -3,8 +3,16 @@ import { db, t } from "@/db";
 import { asc, desc, eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import type { Role } from "@/lib/auth";
-import { ROLE_LABELS } from "@/lib/permissions";
+import {
+  ROLE_LABELS,
+  ROLE_PERMISSIONS,
+  PERMISSION_GROUPS,
+  PERMISSION_LABELS,
+  type Permission,
+} from "@/lib/permissions";
 import { clsx } from "@/lib/clsx";
+import { setUserRole, setPermissionOverride, clearAllOverrides, reassignAndDeactivate, countOpenWork, configureOrgMemory, disconnectOrgMemory } from "@/lib/actions/admin";
+import { ReassignUser } from "@/components/admin/reassign-user";
 import {
   addCommissionRule,
   approveCommissionEntry,
@@ -128,51 +136,163 @@ export default async function SettingsPage({ searchParams }: { searchParams: { t
 
 // ── Team ─────────────────────────────────────────────────────────────────────
 
+function PermButton({
+  userId,
+  perm,
+  mode,
+  label,
+  disabled,
+}: {
+  userId: string;
+  perm: Permission;
+  mode: "grant" | "revoke" | "clear";
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <form action={setPermissionOverride}>
+      <input type="hidden" name="userId" value={userId} />
+      <input type="hidden" name="permission" value={perm} />
+      <input type="hidden" name="mode" value={mode} />
+      <button
+        type="submit"
+        disabled={disabled}
+        className={clsx(
+          "rounded px-1.5 py-0.5 text-[10px] font-medium",
+          mode === "clear"
+            ? "text-slate-500 hover:bg-slate-200"
+            : mode === "grant"
+              ? "text-emerald-700 hover:bg-emerald-100"
+              : "text-red-700 hover:bg-red-100",
+          disabled && "cursor-not-allowed opacity-40"
+        )}
+      >
+        {label}
+      </button>
+    </form>
+  );
+}
+
 async function TeamTab({ currentUserId }: { currentUserId: string }) {
   const users = await db.query.users.findMany({ with: { truck: true }, orderBy: asc(t.users.name) });
+  const overrides = await db.select().from(t.userPermissionOverrides);
+  const ovByUser = new Map<string, Map<Permission, boolean>>();
+  for (const o of overrides) {
+    if (!ovByUser.has(o.userId)) ovByUser.set(o.userId, new Map());
+    ovByUser.get(o.userId)!.set(o.permission as Permission, o.granted);
+  }
+  const reassignTargets = users.filter((u) => u.active).map((u) => ({ id: u.id, name: u.name, role: u.role }));
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader title="Team" subtitle={`${users.length} users`} />
-        <CardBody>
-          {users.length === 0 ? (
-            <EmptyState title="No users" />
-          ) : (
-            <Table>
-              <THead cols={["Name", "Email", "Role", "Phone", "Truck", "Status", ""]} />
-              <tbody>
-                {users.map((u) => (
-                  <TRow key={u.id} className={!u.active ? "opacity-60" : undefined}>
-                    <TCell>
-                      <span className="font-medium">{u.name}</span>
-                      {u.id === currentUserId ? <span className="ml-1 text-xs text-slate-400">(you)</span> : null}
-                    </TCell>
-                    <TCell>{u.email}</TCell>
-                    <TCell>
-                      <Badge tone={ROLE_TONES[u.role]}>{ROLE_LABELS[u.role]}</Badge>
-                    </TCell>
-                    <TCell>{u.phone ?? "—"}</TCell>
-                    <TCell>{u.role === "TECH" ? u.truck?.name ?? <span className="text-slate-400">—</span> : "—"}</TCell>
-                    <TCell>{u.active ? <Badge tone="green">Active</Badge> : <Badge tone="red">Inactive</Badge>}</TCell>
-                    <TCell>
-                      {u.id !== currentUserId ? (
-                        <form action={toggleUserActive}>
-                          <input type="hidden" name="userId" value={u.id} />
-                          <input type="hidden" name="next" value={String(!u.active)} />
-                          <Button type="submit" size="sm" variant={u.active ? "secondary" : "success"}>
-                            {u.active ? "Deactivate" : "Activate"}
-                          </Button>
-                        </form>
-                      ) : null}
-                    </TCell>
-                  </TRow>
-                ))}
-              </tbody>
-            </Table>
-          )}
-        </CardBody>
-      </Card>
+      {users.map((u) => {
+        const roleBase = new Set(ROLE_PERMISSIONS[u.role]);
+        const uOv = ovByUser.get(u.id) ?? new Map<Permission, boolean>();
+        const overrideCount = uOv.size;
+        return (
+          <Card key={u.id} className={!u.active ? "opacity-70" : undefined}>
+            <CardHeader
+              title={
+                <span>
+                  {u.name}
+                  {u.id === currentUserId ? <span className="ml-1 text-xs font-normal text-slate-400">(you)</span> : null}
+                  {!u.active ? <Badge tone="red" className="ml-2">Inactive</Badge> : null}
+                </span>
+              }
+              subtitle={`${u.email}${u.phone ? " · " + u.phone : ""}${u.role === "TECH" && u.truck ? " · " + u.truck.name : ""}`}
+              action={<Badge tone={ROLE_TONES[u.role]}>{ROLE_LABELS[u.role]}</Badge>}
+            />
+            <CardBody className="space-y-3">
+              {/* Role change */}
+              <div className="flex flex-wrap items-end gap-2">
+                <form action={setUserRole} className="flex items-end gap-2">
+                  <input type="hidden" name="userId" value={u.id} />
+                  <Field label="Role">
+                    <Select name="role" defaultValue={u.role} className="w-52">
+                      {(Object.keys(ROLE_LABELS) as Role[]).map((r) => (
+                        <option key={r} value={r}>
+                          {ROLE_LABELS[r]}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Button type="submit" size="sm" variant="secondary">Update role</Button>
+                </form>
+                {u.id !== currentUserId && u.active ? (
+                  <ReassignUser
+                    user={{ id: u.id, name: u.name }}
+                    targets={reassignTargets.filter((tg) => tg.id !== u.id)}
+                    active={u.active}
+                    getCounts={countOpenWork}
+                    reassign={reassignAndDeactivate}
+                  />
+                ) : null}
+                {u.id !== currentUserId && !u.active ? (
+                  <form action={toggleUserActive}>
+                    <input type="hidden" name="userId" value={u.id} />
+                    <input type="hidden" name="next" value="true" />
+                    <Button type="submit" size="sm" variant="success">Reactivate</Button>
+                  </form>
+                ) : null}
+              </div>
+
+              {/* Per-user permission overrides */}
+              <details className="rounded-lg border border-slate-200">
+                <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium text-slate-700">
+                  Permissions
+                  {overrideCount > 0 ? (
+                    <Badge tone="amber" className="ml-2">{overrideCount} override{overrideCount === 1 ? "" : "s"}</Badge>
+                  ) : (
+                    <span className="ml-2 text-xs font-normal text-slate-400">role defaults</span>
+                  )}
+                </summary>
+                <div className="space-y-3 border-t border-slate-100 p-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-slate-500">
+                      Effective = role default ± overrides. Grant adds a permission; Revoke removes one the role normally has.
+                    </p>
+                    {overrideCount > 0 ? (
+                      <form action={clearAllOverrides}>
+                        <input type="hidden" name="userId" value={u.id} />
+                        <Button type="submit" size="sm" variant="ghost">Reset to role</Button>
+                      </form>
+                    ) : null}
+                  </div>
+                  {PERMISSION_GROUPS.map((grp) => (
+                    <div key={grp.label}>
+                      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{grp.label}</div>
+                      <div className="grid gap-1.5 sm:grid-cols-2">
+                        {grp.permissions.map((perm) => {
+                          const ov = uOv.get(perm);
+                          const inRole = roleBase.has(perm);
+                          const effective = ov === undefined ? inRole : ov;
+                          return (
+                            <div key={perm} className="flex items-center justify-between gap-2 rounded-md bg-slate-50 px-2.5 py-1.5">
+                              <span className="text-xs text-slate-700">
+                                {PERMISSION_LABELS[perm]}
+                                {ov !== undefined ? (
+                                  <Badge tone={ov ? "green" : "red"} className="ml-1">{ov ? "granted" : "revoked"}</Badge>
+                                ) : null}
+                              </span>
+                              <div className="flex items-center gap-1">
+                                <span className={clsx("text-[10px] font-medium", effective ? "text-emerald-600" : "text-slate-400")}>
+                                  {effective ? "ON" : "off"}
+                                </span>
+                                <PermButton userId={u.id} perm={perm} mode={inRole ? "revoke" : "grant"} label={inRole ? "Revoke" : "Grant"} disabled={ov !== undefined && ((inRole && ov === false) || (!inRole && ov === true))} />
+                                {ov !== undefined ? <PermButton userId={u.id} perm={perm} mode="clear" label="Reset" /> : null}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            </CardBody>
+          </Card>
+        );
+      })}
 
       <Card>
         <CardHeader title="Invite user" subtitle="Creates the account immediately with a temporary password (bcrypt-hashed)." />
@@ -212,15 +332,61 @@ async function TeamTab({ currentUserId }: { currentUserId: string }) {
 // ── Integrations ─────────────────────────────────────────────────────────────
 
 async function IntegrationsTab() {
-  const connections = await db.query.integrationConnections.findMany({
+  const all = await db.query.integrationConnections.findMany({
     orderBy: asc(t.integrationConnections.provider),
   });
+  const orgMemory = all.find((c) => c.provider === "ORGMEMORY");
+  const orgCfg = (orgMemory?.config ?? {}) as { gatewayUrl?: string; token?: string; namespace?: string };
+  const connections = all.filter((c) => c.provider !== "ORGMEMORY");
 
   return (
     <div className="space-y-4">
+      {/* OrgMemory — company knowledge base backend */}
+      <Card className="border-violet-200">
+        <CardHeader
+          title="🧠 OrgMemory — Company Knowledge Base"
+          subtitle="On-prem MCP-native memory substrate. When connected, the knowledge base uses semantic search and mirrors SOPs into OrgMemory."
+          action={
+            <Badge tone={orgMemory?.status === "CONNECTED" ? "green" : "slate"}>
+              {orgMemory?.status === "CONNECTED" ? "Connected" : "Not connected"}
+            </Badge>
+          }
+        />
+        <CardBody>
+          <form action={configureOrgMemory} className="grid gap-3 md:grid-cols-3">
+            <Field label="Gateway URL (MCP-over-HTTP)">
+              <Input name="gatewayUrl" defaultValue={orgCfg.gatewayUrl ?? ""} placeholder="https://orgmemory.internal:8080" />
+            </Field>
+            <Field label="Access token (JWT)">
+              <Input name="token" type="password" defaultValue={orgCfg.token ?? ""} placeholder="Bearer token" />
+            </Field>
+            <Field label="Namespace">
+              <Input name="namespace" defaultValue={orgCfg.namespace ?? "plumber_app"} placeholder="plumber_app" />
+            </Field>
+            <div className="flex items-center gap-2 md:col-span-3">
+              <Button type="submit">Save & connect</Button>
+              {orgMemory?.status === "CONNECTED" ? (
+                <span className="text-xs text-emerald-600">
+                  ✓ Semantic search active · SOPs mirror to OrgMemory on save
+                </span>
+              ) : (
+                <span className="text-xs text-slate-500">
+                  Falls back to built-in keyword search until a live gateway is configured.
+                </span>
+              )}
+            </div>
+          </form>
+          {orgMemory?.status === "CONNECTED" ? (
+            <form action={disconnectOrgMemory} className="mt-2">
+              <Button type="submit" size="sm" variant="ghost">Disconnect OrgMemory</Button>
+            </form>
+          ) : null}
+        </CardBody>
+      </Card>
+
       <Card className="border-blue-200 bg-blue-50/50">
         <CardBody className="text-sm text-slate-700">
-          ℹ️ Connectors are demo stubs — drop in real OAuth credentials via the integration layer (docs/06).
+          ℹ️ The connectors below are demo stubs — drop in real OAuth credentials via the integration layer (docs/06).
         </CardBody>
       </Card>
 

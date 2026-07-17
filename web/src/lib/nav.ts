@@ -1,4 +1,5 @@
 import type { Role } from "./auth";
+import type { Permission } from "./permissions";
 
 export type NavItem = { href: string; label: string; icon: string };
 
@@ -8,6 +9,7 @@ export const NAV: Record<Role, NavItem[]> = {
     { href: "/my-day", label: "My Day", icon: "🗓️" },
     { href: "/inventory", label: "Truck Stock", icon: "🧰" },
     { href: "/kb", label: "Knowledge", icon: "📖" },
+    { href: "/messages", label: "Messages", icon: "💬" },
     { href: "/earnings", label: "Earnings", icon: "💵" },
   ],
   SALES_PM: [
@@ -17,6 +19,7 @@ export const NAV: Record<Role, NavItem[]> = {
     { href: "/estimates", label: "Estimates", icon: "📝" },
     { href: "/projects", label: "Projects", icon: "🏗️" },
     { href: "/customers", label: "Customers", icon: "👥" },
+    { href: "/messages", label: "Messages", icon: "💬" },
     { href: "/kb", label: "Knowledge", icon: "📖" },
     { href: "/earnings", label: "Earnings", icon: "💵" },
   ],
@@ -27,6 +30,7 @@ export const NAV: Record<Role, NavItem[]> = {
     { href: "/leads", label: "Leads", icon: "📥" },
     { href: "/invoices", label: "Invoices & AR", icon: "🧾" },
     { href: "/inventory", label: "Inventory", icon: "🧰" },
+    { href: "/messages", label: "Messages", icon: "💬" },
     { href: "/kb", label: "Knowledge", icon: "📖" },
   ],
   ADMIN: [
@@ -40,7 +44,30 @@ export const NAV: Record<Role, NavItem[]> = {
     { href: "/inventory", label: "Inventory", icon: "🧰" },
     { href: "/pricebook", label: "Price Book", icon: "📗" },
     { href: "/commissions", label: "Commissions", icon: "💵" },
+    { href: "/messages", label: "Messages", icon: "💬" },
     { href: "/kb", label: "Knowledge", icon: "📖" },
     { href: "/settings", label: "Settings", icon: "⚙️" },
   ],
 };
+
+/** Nav items unlocked by a permission override the base role lacks. */
+const PERMISSION_NAV: { permission: Permission; item: NavItem }[] = [
+  { permission: "reports.company", item: { href: "/dashboard", label: "Dashboard", icon: "📈" } },
+  { permission: "pricebook.edit", item: { href: "/pricebook", label: "Price Book", icon: "📗" } },
+  { permission: "commissions.view.all", item: { href: "/commissions", label: "Commissions", icon: "💵" } },
+  { permission: "schedule.view.all", item: { href: "/dispatch", label: "Dispatch", icon: "🚚" } },
+  { permission: "reports.ar", item: { href: "/invoices", label: "Invoices & AR", icon: "🧾" } },
+];
+
+/** Build nav for a user, adding items unlocked by permission overrides. */
+export function navForUser(role: Role, perms: Set<Permission>): NavItem[] {
+  const items = [...NAV[role]];
+  const hrefs = new Set(items.map((i) => i.href));
+  for (const { permission, item } of PERMISSION_NAV) {
+    if (perms.has(permission) && !hrefs.has(item.href)) {
+      items.splice(items.length - 1, 0, item); // insert before last (usually Settings/Earnings)
+      hrefs.add(item.href);
+    }
+  }
+  return items;
+}

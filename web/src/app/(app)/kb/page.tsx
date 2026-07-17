@@ -20,6 +20,7 @@ import { timeAgo, fmtDate } from "@/lib/format";
 import { snippet } from "@/lib/markdown";
 import { clsx } from "@/lib/clsx";
 import { createKbArticle, suggestKbArticle } from "@/lib/actions/shared";
+import { getKnowledgeStore } from "@/lib/knowledge/store";
 
 export const dynamic = "force-dynamic";
 
@@ -88,6 +89,7 @@ export default async function KbPage({
   const q = (searchParams.q ?? "").trim();
   const cat = CATEGORIES.some((c) => c.key === searchParams.cat) ? (searchParams.cat as CatKey) : undefined;
   const isAuthor = can(session.role, "kb.author");
+  const store = await getKnowledgeStore();
 
   const conds: SQL[] = [];
   if (q) {
@@ -131,6 +133,13 @@ export default async function KbPage({
           Search
         </Button>
       </form>
+      <div className="mb-3">
+        {store.semantic ? (
+          <Badge tone="violet">🧠 Semantic search via OrgMemory</Badge>
+        ) : (
+          <Badge tone="slate">🔎 Keyword search · connect OrgMemory in Settings for semantic search</Badge>
+        )}
+      </div>
       <div className="mb-5 flex flex-wrap gap-2">
         <Link
           href={q ? `/kb?q=${encodeURIComponent(q)}` : "/kb"}

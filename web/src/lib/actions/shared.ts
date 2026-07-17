@@ -58,6 +58,12 @@ export async function createKbArticle(formData: FormData) {
     .values({ slug, title, category, body, tags, authorId: session.userId })
     .returning();
   await audit(session.userId, "CREATE", "KbArticle", article.id, { title, category });
+
+  // Mirror into the company knowledge substrate (OrgMemory) when connected.
+  const { getKnowledgeStore } = await import("@/lib/knowledge/store");
+  const store = await getKnowledgeStore();
+  await store.ingest({ id: article.id, slug, title, category, body, tags });
+
   revalidatePath("/kb");
   redirect(`/kb/${slug}`);
 }
