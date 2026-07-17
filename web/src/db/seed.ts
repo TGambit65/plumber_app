@@ -589,6 +589,113 @@ async function main() {
     { conversationId: conv2.id, senderId: admin.id, body: "Good call. I'll ping the PM at Lakeview this morning.", createdAt: daysFromNow(0, 7, 50) },
   ]);
 
+  console.log("Claims & compliance…");
+  const [nationwide] = await db
+    .insert(t.carriers)
+    .values([
+      { name: "Nationwide Mutual", phone: "800-555-0110", email: "claims@nationwide.demo", claimsPortalUrl: "https://claims.nationwide.demo" },
+      { name: "State Farm", phone: "800-555-0120", email: "claims@statefarm.demo" },
+    ])
+    .returning();
+  const [adjusterRow] = await db
+    .insert(t.adjusters)
+    .values([{ carrierId: nationwide.id, name: "Karen Doyle", phone: "555-6001", email: "k.doyle@nationwide.demo", notes: "Prefers photo docs before call" }])
+    .returning();
+  const [claimMaria] = await db
+    .insert(t.claims)
+    .values([
+      {
+        claimNumber: "NW-2026-448811",
+        status: "DOCUMENTING",
+        customerId: maria.id,
+        propertyId: pMaria.id,
+        carrierId: nationwide.id,
+        adjusterId: adjusterRow.id,
+        policyNumber: "HO-99-1123-B",
+        dateOfLoss: daysFromNow(-2, 14),
+        lossDescription: "Supply line failure under kitchen sink — water damage to cabinet base and subfloor.",
+        deductibleCents: $(1000),
+        createdById: sales.id,
+      },
+    ])
+    .returning();
+  await db.update(t.jobs).set({ claimId: claimMaria.id }).where(sql`number = 'J-1043'`);
+  await db.insert(t.claimSupplements).values([
+    { claimId: claimMaria.id, number: "SUP-01", description: "Subfloor moisture remediation discovered after cabinet removal", amountCents: $(1850), status: "SUBMITTED", submittedAt: daysFromNow(-1, 9) },
+  ]);
+
+  const [tplBackflow, tplWH] = await db
+    .insert(t.inspectionTemplates)
+    .values([
+      {
+        name: "Backflow Prevention Assembly Test",
+        tradePackKey: "plumbing",
+        description: "Annual RPZ/DCVA test per local water authority.",
+        issuesCertification: "Backflow Prevention Test Certificate",
+        certValidityDays: 365,
+        steps: [
+          { key: "shutoff", label: "Isolate assembly — shutoff valves hold", kind: "check", required: true },
+          { key: "rv_psid", label: "Relief valve opening point (PSID)", kind: "measurement", unit: "PSID", required: true },
+          { key: "cv1", label: "Check valve #1 holds tight", kind: "check", required: true },
+          { key: "cv2", label: "Check valve #2 holds tight", kind: "check", required: true },
+          { key: "photo", label: "Photo of gauge readings + assembly tag", kind: "photo", required: true },
+          { key: "note", label: "Conditions / repairs noted", kind: "note", required: false },
+        ],
+      },
+      {
+        name: "Water Heater Install Final Inspection",
+        tradePackKey: "plumbing",
+        description: "Post-install verification before closeout.",
+        steps: [
+          { key: "tpr", label: "T&P relief valve + discharge pipe to 6\" of floor", kind: "check", required: true },
+          { key: "gas_leak", label: "Gas joints leak-tested with solution", kind: "check", required: true },
+          { key: "draft", label: "Vent draft verified (smoke test)", kind: "check", required: true },
+          { key: "temp", label: "Outlet temperature", kind: "measurement", unit: "°F", required: true },
+          { key: "photo", label: "After photos match before angles", kind: "photo", required: true },
+        ],
+      },
+      {
+        name: "Site Safety Walkthrough",
+        tradePackKey: null,
+        description: "Generic pre-work safety inspection (all trades).",
+        steps: [
+          { key: "ppe", label: "PPE on site & worn", kind: "check", required: true },
+          { key: "hazards", label: "Hazards identified & controlled", kind: "check", required: true },
+          { key: "note", label: "Notes", kind: "note", required: false },
+        ],
+      },
+    ])
+    .returning();
+
+  const [inspDone] = await db
+    .insert(t.inspections)
+    .values([
+      {
+        templateId: tplBackflow.id,
+        status: "PASSED",
+        propertyId: pBluebird.id,
+        inspectorId: tech.id,
+        scheduledAt: daysFromNow(-30, 9),
+        completedAt: daysFromNow(-30, 10),
+        results: { shutoff: { pass: true }, rv_psid: { value: 2.4, pass: true }, cv1: { pass: true }, cv2: { pass: true }, photo: { pass: true }, note: { value: "Assembly in good condition" } },
+      },
+      {
+        templateId: tplWH.id,
+        status: "SCHEDULED",
+        jobId: jWH.id,
+        inspectorId: tech.id,
+        scheduledAt: daysFromNow(0, 12),
+      },
+    ])
+    .returning();
+
+  await db.insert(t.certifications).values([
+    { name: "Backflow Prevention Test Certificate", holderType: "EQUIPMENT", equipmentId: null, certificateNumber: "BF-2026-0341", issuingAuthority: "Riverton Water Authority", issuedAt: daysFromNow(-30), expiresAt: daysFromNow(335), sourceInspectionId: inspDone.id, notes: "Bluebird Cafe RPZ assembly" },
+    { name: "Journeyman Plumber License", holderType: "USER", userId: tech.id, certificateNumber: "JP-88213", issuingAuthority: "Ohio Dept. of Commerce", issuedAt: daysFromNow(-700), expiresAt: daysFromNow(21), notes: "Renewal window open — CE hours complete" },
+    { name: "Master Plumber License", holderType: "USER", userId: admin.id, certificateNumber: "MP-11402", issuingAuthority: "Ohio Dept. of Commerce", issuedAt: daysFromNow(-1400), expiresAt: daysFromNow(280) },
+    { name: "Med-Gas Brazing Certification", holderType: "USER", userId: tech2.id, certificateNumber: "MG-5521", issuingAuthority: "NITC", issuedAt: daysFromNow(-800), expiresAt: daysFromNow(-12), notes: "EXPIRED — do not schedule med-gas work" },
+  ]);
+
   console.log("Audit log…");
   await db.insert(t.auditLogs).values([
     { userId: admin.id, action: "UPDATE", entity: "PriceBookItem", entityId: pbByCode["WH-50G-PRO"].id, detail: { field: "unitPriceCents", from: 239500, to: 245000 } },
@@ -632,6 +739,25 @@ async function main() {
   await db.insert(t.integrationConnections).values([
     { provider: "QUICKBOOKS", status: "CONNECTED", lastSyncAt: daysFromNow(0, 6) },
     { provider: "ORGMEMORY", status: "DISCONNECTED" },
+  ]);
+  // Summit compliance: RTU PM template + EPA 608 cert for Ben
+  await db.insert(t.inspectionTemplates).values([
+    {
+      name: "Rooftop Unit Quarterly PM Inspection",
+      tradePackKey: "hvac",
+      description: "Quarterly RTU preventive-maintenance verification.",
+      steps: [
+        { key: "loto", label: "Lockout/tagout applied", kind: "check", required: true },
+        { key: "amps", label: "Compressor amp draw", kind: "measurement", unit: "A", required: true },
+        { key: "coils", label: "Coils cleaned, condensate clear", kind: "check", required: true },
+        { key: "filters", label: "Filters replaced", kind: "check", required: true },
+        { key: "photo", label: "Photo of unit + filter", kind: "photo", required: true },
+      ],
+    },
+  ]);
+  await db.insert(t.certifications).values([
+    { name: "EPA 608 Universal", holderType: "USER", userId: sTech.id, certificateNumber: "EPA-608-77120", issuingAuthority: "US EPA", issuedAt: daysFromNow(-900), expiresAt: null, notes: "Does not expire" },
+    { name: "OH HVAC Contractor License", holderType: "USER", userId: sAdmin.id, certificateNumber: "HV-30215", issuingAuthority: "Ohio Dept. of Commerce", issuedAt: daysFromNow(-300), expiresAt: daysFromNow(65) },
   ]);
 
   console.log("✅ Seed complete (2 orgs).");

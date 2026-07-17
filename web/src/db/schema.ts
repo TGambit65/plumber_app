@@ -184,6 +184,7 @@ export const estimates = pgTable("estimates", {
   propertyId: text("property_id").references(() => properties.id),
   leadId: text("lead_id").references(() => leads.id),
   jobId: text("job_id").references(() => jobs.id),
+  claimId: text("claim_id").references(() => claims.id), // insurance claim linkage (core)
   createdById: text("created_by_id").notNull().references(() => users.id),
   notes: text("notes"),
   financingOffered: boolean("financing_offered").notNull().default(true),
@@ -232,6 +233,7 @@ export const jobs = pgTable("jobs", {
   propertyId: text("property_id").notNull().references(() => properties.id),
   assignedToId: text("assigned_to_id").references(() => users.id),
   projectId: text("project_id").references(() => projects.id),
+  claimId: text("claim_id").references(() => claims.id), // insurance claim linkage (core)
   scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
   scheduledEnd: timestamp("scheduled_end", { withTimezone: true }),
   completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -603,6 +605,7 @@ export const estimatesRelations = relations(estimates, ({ one, many }) => ({
   property: one(properties, { fields: [estimates.propertyId], references: [properties.id] }),
   lead: one(leads, { fields: [estimates.leadId], references: [leads.id] }),
   job: one(jobs, { fields: [estimates.jobId], references: [jobs.id] }),
+  claim: one(claims, { fields: [estimates.claimId], references: [claims.id] }),
   createdBy: one(users, { fields: [estimates.createdById], references: [users.id] }),
   options: many(estimateOptions),
   followUps: many(followUps),
@@ -623,6 +626,7 @@ export const jobsRelations = relations(jobs, ({ one, many }) => ({
   property: one(properties, { fields: [jobs.propertyId], references: [properties.id] }),
   assignedTo: one(users, { fields: [jobs.assignedToId], references: [users.id] }),
   project: one(projects, { fields: [jobs.projectId], references: [projects.id] }),
+  claim: one(claims, { fields: [jobs.claimId], references: [claims.id] }),
   photos: many(jobPhotos),
   forms: many(jobForms),
   timeEntries: many(timeEntries),
@@ -874,4 +878,169 @@ export const tradePacksRelations = relations(tradePacks, ({ many }) => ({
 export const organizationTradePacksRelations = relations(organizationTradePacks, ({ one }) => ({
   organization: one(organizations, { fields: [organizationTradePacks.organizationId], references: [organizations.id] }),
   tradePack: one(tradePacks, { fields: [organizationTradePacks.tradePackId], references: [tradePacks.id] }),
+}));
+
+// ── Insurance / Claims (CORE, not a pack — constraint 3) ────────────────────
+// Restoration & roofing depend on this; every trade may use it.
+// Claims data is PII-sensitive: writes are audited, exports logged.
+
+export const claimStatusEnum = pgEnum("claim_status", [
+  "OPEN", "DOCUMENTING", "SUBMITTED", "SUPPLEMENT", "APPROVED", "PAID", "DENIED", "CLOSED",
+]);
+export const supplementStatusEnum = pgEnum("supplement_status", [
+  "DRAFT", "SUBMITTED", "APPROVED", "DENIED",
+]);
+
+export const carriers = pgTable("carriers", {
+  id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
+  name: text("name").notNull(),
+  phone: text("phone"),
+  email: text("email"),
+  claimsPortalUrl: text("claims_portal_url"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const adjusters = pgTable("adjusters", {
+  id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
+  carrierId: text("carrier_id").notNull().references(() => carriers.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  phone: text("phone"),
+  email: text("email"),
+  notes: text("notes"),
+});
+
+export const claims = pgTable(
+  "claims",
+  {
+    id: id(),
+    organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
+    claimNumber: text("claim_number").notNull(),
+    status: claimStatusEnum("status").notNull().default("OPEN"),
+    customerId: text("customer_id").notNull().references(() => customers.id),
+    propertyId: text("property_id").references(() => properties.id),
+    carrierId: text("carrier_id").references(() => carriers.id),
+    adjusterId: text("adjuster_id").references(() => adjusters.id),
+    policyNumber: text("policy_number"), // PII-sensitive
+    dateOfLoss: timestamp("date_of_loss", { withTimezone: true }),
+    lossDescription: text("loss_description"),
+    deductibleCents: integer("deductible_cents"),
+    approvedAmountCents: integer("approved_amount_cents"),
+    createdById: text("created_by_id").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (tb) => ({
+    orgClaimNo: uniqueIndex("claims_org_claim_number_idx").on(tb.organizationId, tb.claimNumber),
+  })
+);
+
+export const claimSupplements = pgTable("claim_supplements", {
+  id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
+  claimId: text("claim_id").notNull().references(() => claims.id, { onDelete: "cascade" }),
+  number: text("number").notNull(), // SUP-01
+  description: text("description").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  status: supplementStatusEnum("status").notNull().default("DRAFT"),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ── Compliance / Inspection engine (CORE — constraint 4) ────────────────────
+// Generic engine; trade packs specialize via templates (fuel: UST testing,
+// weights-&-measures; electrical: permits; plumbing: backflow).
+
+export const inspectionStatusEnum = pgEnum("inspection_status", [
+  "SCHEDULED", "IN_PROGRESS", "PASSED", "FAILED", "CANCELLED",
+]);
+export const certHolderEnum = pgEnum("cert_holder", ["USER", "EQUIPMENT", "ORGANIZATION"]);
+
+export const inspectionTemplates = pgTable("inspection_templates", {
+  id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
+  name: text("name").notNull(),
+  tradePackKey: text("trade_pack_key"), // null = generic/core template
+  description: text("description"),
+  // Ordered steps: [{ key, label, kind: "check"|"measurement"|"photo"|"note", required, unit? }]
+  steps: jsonb("steps").notNull(),
+  // Passing this inspection can issue a certification automatically:
+  issuesCertification: text("issues_certification"), // cert name, e.g. "Backflow Prevention Test"
+  certValidityDays: integer("cert_validity_days"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const inspections = pgTable("inspections", {
+  id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
+  templateId: text("template_id").notNull().references(() => inspectionTemplates.id),
+  status: inspectionStatusEnum("status").notNull().default("SCHEDULED"),
+  jobId: text("job_id").references(() => jobs.id),
+  propertyId: text("property_id").references(() => properties.id),
+  equipmentId: text("equipment_id").references(() => equipment.id),
+  inspectorId: text("inspector_id").references(() => users.id),
+  scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  // Results keyed by step key: { [key]: { value, pass, note } }
+  results: jsonb("results"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const certifications = pgTable("certifications", {
+  id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
+  name: text("name").notNull(), // e.g. "Journeyman Plumber License", "UST Operator A/B"
+  holderType: certHolderEnum("holder_type").notNull(),
+  userId: text("user_id").references(() => users.id),
+  equipmentId: text("equipment_id").references(() => equipment.id),
+  certificateNumber: text("certificate_number"),
+  issuingAuthority: text("issuing_authority"),
+  issuedAt: timestamp("issued_at", { withTimezone: true }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  sourceInspectionId: text("source_inspection_id").references(() => inspections.id),
+  renewalNotifiedAt: timestamp("renewal_notified_at", { withTimezone: true }),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ── Phase-3 relations ────────────────────────────────────────────────────────
+export const carriersRelations = relations(carriers, ({ many }) => ({
+  adjusters: many(adjusters),
+  claims: many(claims),
+}));
+export const adjustersRelations = relations(adjusters, ({ one, many }) => ({
+  carrier: one(carriers, { fields: [adjusters.carrierId], references: [carriers.id] }),
+  claims: many(claims),
+}));
+export const claimsRelations = relations(claims, ({ one, many }) => ({
+  customer: one(customers, { fields: [claims.customerId], references: [customers.id] }),
+  property: one(properties, { fields: [claims.propertyId], references: [properties.id] }),
+  carrier: one(carriers, { fields: [claims.carrierId], references: [carriers.id] }),
+  adjuster: one(adjusters, { fields: [claims.adjusterId], references: [adjusters.id] }),
+  createdBy: one(users, { fields: [claims.createdById], references: [users.id] }),
+  supplements: many(claimSupplements),
+  jobs: many(jobs),
+  estimates: many(estimates),
+}));
+export const claimSupplementsRelations = relations(claimSupplements, ({ one }) => ({
+  claim: one(claims, { fields: [claimSupplements.claimId], references: [claims.id] }),
+}));
+export const inspectionTemplatesRelations = relations(inspectionTemplates, ({ many }) => ({
+  inspections: many(inspections),
+}));
+export const inspectionsRelations = relations(inspections, ({ one }) => ({
+  template: one(inspectionTemplates, { fields: [inspections.templateId], references: [inspectionTemplates.id] }),
+  job: one(jobs, { fields: [inspections.jobId], references: [jobs.id] }),
+  property: one(properties, { fields: [inspections.propertyId], references: [properties.id] }),
+  equipmentRef: one(equipment, { fields: [inspections.equipmentId], references: [equipment.id] }),
+  inspector: one(users, { fields: [inspections.inspectorId], references: [users.id] }),
+}));
+export const certificationsRelations = relations(certifications, ({ one }) => ({
+  user: one(users, { fields: [certifications.userId], references: [users.id] }),
+  equipmentRef: one(equipment, { fields: [certifications.equipmentId], references: [equipment.id] }),
+  sourceInspection: one(inspections, { fields: [certifications.sourceInspectionId], references: [inspections.id] }),
 }));

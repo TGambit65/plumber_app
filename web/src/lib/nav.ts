@@ -18,6 +18,7 @@ export const NAV: Record<Role, NavItem[]> = {
     { href: "/pipeline", label: "Pipeline", icon: "📊" },
     { href: "/estimates", label: "Estimates", icon: "📝" },
     { href: "/projects", label: "Projects", icon: "🏗️" },
+    { href: "/claims", label: "Claims", icon: "🛡️" },
     { href: "/customers", label: "Customers", icon: "👥" },
     { href: "/messages", label: "Messages", icon: "💬" },
     { href: "/kb", label: "Knowledge", icon: "📖" },
@@ -29,6 +30,8 @@ export const NAV: Record<Role, NavItem[]> = {
     { href: "/customers", label: "Customers", icon: "👥" },
     { href: "/leads", label: "Leads", icon: "📥" },
     { href: "/invoices", label: "Invoices & AR", icon: "🧾" },
+    { href: "/claims", label: "Claims", icon: "🛡️" },
+    { href: "/compliance", label: "Compliance", icon: "✅" },
     { href: "/inventory", label: "Inventory", icon: "🧰" },
     { href: "/messages", label: "Messages", icon: "💬" },
     { href: "/kb", label: "Knowledge", icon: "📖" },
@@ -41,6 +44,8 @@ export const NAV: Record<Role, NavItem[]> = {
     { href: "/projects", label: "Projects", icon: "🏗️" },
     { href: "/customers", label: "Customers", icon: "👥" },
     { href: "/invoices", label: "Invoices & AR", icon: "🧾" },
+    { href: "/claims", label: "Claims", icon: "🛡️" },
+    { href: "/compliance", label: "Compliance", icon: "✅" },
     { href: "/inventory", label: "Inventory", icon: "🧰" },
     { href: "/pricebook", label: "Price Book", icon: "📗" },
     { href: "/commissions", label: "Commissions", icon: "💵" },
@@ -57,6 +62,8 @@ const PERMISSION_NAV: { permission: Permission; item: NavItem }[] = [
   { permission: "commissions.view.all", item: { href: "/commissions", label: "Commissions", icon: "💵" } },
   { permission: "schedule.view.all", item: { href: "/dispatch", label: "Dispatch", icon: "🚚" } },
   { permission: "reports.ar", item: { href: "/invoices", label: "Invoices & AR", icon: "🧾" } },
+  { permission: "claims.manage", item: { href: "/claims", label: "Claims", icon: "🛡️" } },
+  { permission: "compliance.manage", item: { href: "/compliance", label: "Compliance", icon: "✅" } },
 ];
 
 /** Build nav for a user, adding items unlocked by permission overrides. */

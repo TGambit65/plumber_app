@@ -31,12 +31,16 @@ export type Permission =
   | "commissions.rules.manage"
   | "reports.company"
   | "reports.ar"
+  | "claims.manage"
+  | "inspections.run"
+  | "compliance.manage"
   | "users.manage"
   | "integrations.manage"
   | "audit.view";
 
 const TECH: Permission[] = [
   "schedule.view.own",
+  "inspections.run",
   "customers.view",
   "leads.create",
   "estimates.create",
@@ -50,6 +54,7 @@ const TECH: Permission[] = [
 
 const SALES_PM: Permission[] = [
   "schedule.view.own",
+  "claims.manage",
   "schedule.view.all",
   "customers.view",
   "customers.edit",
@@ -66,6 +71,9 @@ const SALES_PM: Permission[] = [
 
 const OFFICE: Permission[] = [
   "schedule.view.all",
+  "claims.manage",
+  "compliance.manage",
+  "inspections.run",
   "dispatch.manage",
   "customers.view",
   "customers.edit",
@@ -87,6 +95,9 @@ const ADMIN: Permission[] = Array.from(
     ...SALES_PM,
     ...OFFICE,
     "estimates.discount.unlimited",
+    "claims.manage",
+    "compliance.manage",
+    "inspections.run",
     "payments.refund",
     "pricebook.edit",
     "commissions.view.all",
@@ -151,6 +162,9 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "commissions.rules.manage": "Manage commission rules",
   "reports.company": "Company dashboards",
   "reports.ar": "AR reporting",
+  "claims.manage": "Manage insurance claims",
+  "inspections.run": "Run inspections",
+  "compliance.manage": "Manage compliance & certifications",
   "users.manage": "Manage users",
   "integrations.manage": "Manage integrations",
   "audit.view": "View audit log",
@@ -162,6 +176,7 @@ export const PERMISSION_GROUPS: { label: string; permissions: Permission[] }[] =
   { label: "Customers", permissions: ["customers.view", "customers.edit", "customers.merge"] },
   { label: "Sales", permissions: ["leads.create", "pipeline.manage", "estimates.create", "estimates.discount.unlimited", "projects.manage"] },
   { label: "Field & money", permissions: ["jobs.work", "invoices.create", "payments.take", "payments.refund"] },
+  { label: "Claims & compliance", permissions: ["claims.manage", "inspections.run", "compliance.manage"] },
   { label: "Inventory & pricing", permissions: ["inventory.view", "inventory.manage", "pricebook.edit"] },
   { label: "Knowledge", permissions: ["kb.view", "kb.author"] },
   { label: "Money & reporting", permissions: ["commissions.view.own", "commissions.view.all", "commissions.rules.manage", "reports.company", "reports.ar"] },

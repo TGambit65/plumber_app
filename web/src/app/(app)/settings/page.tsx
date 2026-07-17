@@ -25,6 +25,14 @@ import {
   toggleUserActive,
 } from "@/lib/actions/office";
 import {
+  configureConnector,
+  disconnectConnector,
+  syncCrmNow,
+  testConnector,
+} from "@/lib/actions/connectors";
+import { getConnector, listByCapability } from "@/lib/connectors/providers";
+import { CAPABILITY_LABELS, type Connector } from "@/lib/connectors/types";
+import {
   Badge,
   Button,
   Card,
@@ -63,12 +71,9 @@ const ROLE_TONES: Record<string, BadgeTone> = {
   TECH: "green",
 };
 
-const PROVIDERS: Record<string, { emoji: string; label: string; blurb: string }> = {
-  QUICKBOOKS: { emoji: "📗", label: "QuickBooks", blurb: "Accounting — invoices, payments, GL sync" },
-  HUBSPOT: { emoji: "🟠", label: "HubSpot", blurb: "CRM — inbound leads, outbound activity" },
-  SALESFORCE: { emoji: "☁️", label: "Salesforce", blurb: "CRM — enterprise pipeline sync" },
+/** Legacy providers with a seeded row but no typed connector yet ("Other" group). */
+const LEGACY_PROVIDERS: Record<string, { emoji: string; label: string; blurb: string }> = {
   STRIPE: { emoji: "💳", label: "Stripe", blurb: "Card & ACH payment processing" },
-  TWILIO: { emoji: "💬", label: "Twilio", blurb: "SMS — on-my-way texts & follow-ups" },
   FERGUSON: { emoji: "🔩", label: "Ferguson", blurb: "Supplier punchout — POs & pricing" },
   GOOGLE_LSA: { emoji: "🔍", label: "Google LSA", blurb: "Local Services Ads lead intake" },
   ANGI: { emoji: "🏠", label: "Angi", blurb: "Marketplace lead intake" },
@@ -335,6 +340,88 @@ async function TeamTab({ currentUserId, organizationId }: { currentUserId: strin
 
 // ── Integrations ─────────────────────────────────────────────────────────────
 
+type ConnectionRow = typeof t.integrationConnections.$inferSelect;
+
+/** One typed-connector card: status, config form (descriptor-driven), actions. */
+function ConnectorCard({ connector, conn }: { connector: Connector; conn?: ConnectionRow }) {
+  const d = connector.descriptor;
+  const status = conn?.status ?? "DISCONNECTED";
+  const cfg = (conn?.config ?? {}) as Record<string, string | undefined>;
+  const isCrm = d.capabilities.includes("crm");
+  const isReal = d.provider === "ODOO";
+
+  return (
+    <Card className={status === "ERROR" ? "border-red-200" : undefined}>
+      <CardBody>
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl" aria-hidden="true">{d.emoji}</span>
+            <div>
+              <div className="text-sm font-semibold text-slate-900">
+                {d.label}
+                {isReal ? <Badge tone="violet" className="ml-1.5">Live API</Badge> : <Badge tone="slate" className="ml-1.5">Demo stub</Badge>}
+              </div>
+              <div className="text-xs text-slate-500">{d.blurb}</div>
+            </div>
+          </div>
+          <Badge tone={INTEGRATION_TONE[status]}>
+            {status === "ERROR" ? "Error" : status === "CONNECTED" ? "Connected" : "Disconnected"}
+          </Badge>
+        </div>
+
+        <p className="mt-2 text-xs text-slate-500">Last sync: {conn?.lastSyncAt ? timeAgo(conn.lastSyncAt) : "never"}</p>
+        {status === "ERROR" && cfg.lastError ? (
+          <p className="mt-1 rounded-md bg-red-50 px-2 py-1 text-xs font-medium text-red-700" title={cfg.lastError}>
+            ⚠️ {cfg.lastError}
+          </p>
+        ) : null}
+
+        <details className="mt-3 rounded-lg border border-slate-200" open={status === "ERROR"}>
+          <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-slate-700">
+            {conn ? "Configuration" : "Configure & connect"}
+          </summary>
+          <form action={configureConnector} className="space-y-2 border-t border-slate-100 p-3">
+            <input type="hidden" name="provider" value={d.provider} />
+            {d.configFields.map((f) => (
+              <Field key={f.key} label={`${f.label}${f.required ? "" : " (optional)"}`}>
+                <Input
+                  name={f.key}
+                  type={f.kind === "password" ? "password" : f.kind === "url" ? "url" : "text"}
+                  defaultValue={cfg[f.key] ?? ""}
+                  placeholder={f.placeholder}
+                  required={f.required}
+                />
+              </Field>
+            ))}
+            <Button type="submit" size="sm">{status === "CONNECTED" ? "Save & reconnect" : "Save & connect"}</Button>
+          </form>
+        </details>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          {conn ? (
+            <form action={testConnector}>
+              <input type="hidden" name="provider" value={d.provider} />
+              <Button type="submit" size="sm" variant="secondary">Test</Button>
+            </form>
+          ) : null}
+          {isCrm && status === "CONNECTED" ? (
+            <form action={syncCrmNow}>
+              <input type="hidden" name="provider" value={d.provider} />
+              <Button type="submit" size="sm" variant="secondary">Sync now</Button>
+            </form>
+          ) : null}
+          {status === "CONNECTED" ? (
+            <form action={disconnectConnector}>
+              <input type="hidden" name="provider" value={d.provider} />
+              <Button type="submit" size="sm" variant="ghost">Disconnect</Button>
+            </form>
+          ) : null}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
 async function IntegrationsTab({ organizationId }: { organizationId: string }) {
   const all = await withTenant(organizationId, (tx) =>
     tx.query.integrationConnections.findMany({
@@ -343,7 +430,10 @@ async function IntegrationsTab({ organizationId }: { organizationId: string }) {
   );
   const orgMemory = all.find((c) => c.provider === "ORGMEMORY");
   const orgCfg = (orgMemory?.config ?? {}) as { gatewayUrl?: string; token?: string; namespace?: string };
-  const connections = all.filter((c) => c.provider !== "ORGMEMORY");
+  const byProvider = new Map(all.map((c) => [c.provider, c]));
+  const groups = listByCapability();
+  // Rows with no typed connector (and not ORGMEMORY) fall back to the old simple actions.
+  const legacy = all.filter((c) => c.provider !== "ORGMEMORY" && !getConnector(c.provider));
 
   return (
     <div className="space-y-4">
@@ -392,68 +482,91 @@ async function IntegrationsTab({ organizationId }: { organizationId: string }) {
 
       <Card className="border-blue-200 bg-blue-50/50">
         <CardBody className="text-sm text-slate-700">
-          ℹ️ The connectors below are demo stubs — drop in real OAuth credentials via the integration layer (docs/06).
+          ℹ️ Connectors augment your existing stack — the app reads/writes your tools and stays fully functional when
+          everything below is disconnected. <span className="font-medium">Odoo CRM</span> is a live JSON-RPC
+          implementation; the others are demo stubs returning sample data until real credentials land. Synced CRM
+          records flow into OrgMemory (when connected) as provenance-tagged <em>staged</em> candidates — never
+          auto-canon.
         </CardBody>
       </Card>
 
-      {connections.length === 0 ? (
-        <EmptyState title="No integrations configured" hint="Seed the database to see the integrations hub." />
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {connections.map((conn) => {
-            const meta = PROVIDERS[conn.provider] ?? { emoji: "🔌", label: conn.provider, blurb: "" };
-            return (
-              <Card key={conn.id}>
-                <CardBody>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-2xl" aria-hidden="true">
-                        {meta.emoji}
-                      </span>
-                      <div>
-                        <div className="text-sm font-semibold text-slate-900">{meta.label}</div>
-                        <div className="text-xs text-slate-500">{meta.blurb}</div>
+      {groups.map(({ capability, connectors }) => (
+        <section key={capability}>
+          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+            {CAPABILITY_LABELS[capability]}
+            {capability === "crm" ? <span className="ml-2 text-[11px] font-normal normal-case text-slate-400">Odoo CRM is the reference live connector</span> : null}
+          </h3>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {connectors.map((connector) => (
+              <ConnectorCard
+                key={connector.descriptor.provider}
+                connector={connector}
+                conn={byProvider.get(connector.descriptor.provider)}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
+
+      {legacy.length > 0 ? (
+        <section>
+          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">Other</h3>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {legacy.map((conn) => {
+              const meta = LEGACY_PROVIDERS[conn.provider] ?? { emoji: "🔌", label: conn.provider, blurb: "" };
+              return (
+                <Card key={conn.id}>
+                  <CardBody>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl" aria-hidden="true">
+                          {meta.emoji}
+                        </span>
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900">{meta.label}</div>
+                          <div className="text-xs text-slate-500">{meta.blurb}</div>
+                        </div>
                       </div>
+                      <Badge tone={INTEGRATION_TONE[conn.status]}>{conn.status === "ERROR" ? "Error" : conn.status === "CONNECTED" ? "Connected" : "Disconnected"}</Badge>
                     </div>
-                    <Badge tone={INTEGRATION_TONE[conn.status]}>{conn.status === "ERROR" ? "Error" : conn.status === "CONNECTED" ? "Connected" : "Disconnected"}</Badge>
-                  </div>
-                  <p className="mt-2 text-xs text-slate-500">
-                    Last sync: {conn.lastSyncAt ? timeAgo(conn.lastSyncAt) : "never"}
-                  </p>
-                  {conn.status === "ERROR" ? (
-                    <p className="mt-1 text-xs text-red-600">Connection error — reconnect to resume syncing.</p>
-                  ) : null}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {conn.status === "CONNECTED" ? (
-                      <>
-                        <form action={syncIntegration}>
+                    <p className="mt-2 text-xs text-slate-500">
+                      Last sync: {conn.lastSyncAt ? timeAgo(conn.lastSyncAt) : "never"}
+                    </p>
+                    {conn.status === "ERROR" ? (
+                      <p className="mt-1 text-xs text-red-600">Connection error — reconnect to resume syncing.</p>
+                    ) : null}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {conn.status === "CONNECTED" ? (
+                        <>
+                          <form action={syncIntegration}>
+                            <input type="hidden" name="id" value={conn.id} />
+                            <Button type="submit" size="sm" variant="secondary">
+                              Sync now
+                            </Button>
+                          </form>
+                          <form action={disconnectIntegration}>
+                            <input type="hidden" name="id" value={conn.id} />
+                            <Button type="submit" size="sm" variant="ghost">
+                              Disconnect
+                            </Button>
+                          </form>
+                        </>
+                      ) : (
+                        <form action={connectIntegration}>
                           <input type="hidden" name="id" value={conn.id} />
-                          <Button type="submit" size="sm" variant="secondary">
-                            Sync now
+                          <Button type="submit" size="sm">
+                            {conn.status === "ERROR" ? "Reconnect" : "Connect"}
                           </Button>
                         </form>
-                        <form action={disconnectIntegration}>
-                          <input type="hidden" name="id" value={conn.id} />
-                          <Button type="submit" size="sm" variant="ghost">
-                            Disconnect
-                          </Button>
-                        </form>
-                      </>
-                    ) : (
-                      <form action={connectIntegration}>
-                        <input type="hidden" name="id" value={conn.id} />
-                        <Button type="submit" size="sm">
-                          {conn.status === "ERROR" ? "Reconnect" : "Connect"}
-                        </Button>
-                      </form>
-                    )}
-                  </div>
-                </CardBody>
-              </Card>
-            );
-          })}
-        </div>
-      )}
+                      )}
+                    </div>
+                  </CardBody>
+                </Card>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

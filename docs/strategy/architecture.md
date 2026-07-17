@@ -130,7 +130,24 @@ conversion completes:
 - **Phase 2 (done):** full tenancy conversion — every module on `withTenant`,
   FORCE RLS on all 41 tenant tables (incl. users via the auth-function
   bootstrap), mutation + isolation verification for both seeded orgs.
-- **Phase 3:** typed connector interface (Odoo CRM first) + claims core +
-  compliance/inspection engine.
+- **Phase 3 (done):** typed connector interface + claims core +
+  compliance/inspection engine:
+  - `src/lib/connectors/` — capability-typed Connector interface (crm /
+    accounting / jobs / messaging / pm), **Odoo CRM live JSON-RPC impl**
+    (authenticate + crm.lead search_read + res.partner upsert + message_post),
+    registry of 13 further providers as descriptor-complete stubs, config-driven
+    settings hub grouped by capability, loud ERROR + lastError on failure,
+    CRM sync-in inserts new leads and stages each into OrgMemory as
+    provenance-tagged candidates.
+  - Claims core: carriers/adjusters/claims/supplements (+ claimId on
+    jobs/estimates), claim command center with claim-linked photo documentation,
+    status workflow, supplements, and an audited carrier-format export package;
+    policy numbers masked in audit detail (PII).
+  - Compliance engine: inspection templates (steps jsonb, pack-specialized via
+    the org's ENABLED packs only), mobile-first run-inspection flow with
+    required-step gating, auto certification issuance on PASS
+    (certValidityDays), certification registry (user/equipment/org holders),
+    expiring-soon panel + renewal sweep notifications. All seven new tables
+    under FORCE RLS; isolation verified across both seeded orgs.
 - **Phase 4:** offline-first implementation + approval-gated egress + AA
   field-ops pack + SSO federation.

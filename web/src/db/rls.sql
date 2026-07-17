@@ -36,6 +36,9 @@ DECLARE
     -- knowledge & comms
     'kb_articles', 'activities', 'notifications',
     'conversations', 'conversation_participants', 'messages',
+    -- claims (PII-sensitive) & compliance
+    'carriers', 'adjusters', 'claims', 'claim_supplements',
+    'inspection_templates', 'inspections', 'certifications',
     -- admin
     'audit_logs', 'user_permission_overrides', 'integration_connections',
     'organization_trade_packs',
