@@ -12,6 +12,7 @@
     "db:seed": "tsx --env-file=.env src/db/seed.ts",
     "test": "vitest run",
     "db:rls": "echo \"Run as a superuser/BYPASSRLS role: psql -d <db> -f src/db/rls.sql\" && sudo -u postgres psql -d plumber_app -f src/db/rls.sql",
+    "db:verify-rls": "tsx --env-file=.env src/db/verify-rls.ts",
     "db:sync-triggers": "psql $DATABASE_URL -f src/db/sync.sql"
   },
   "dependencies": {

@@ -7,6 +7,7 @@ import type { Role } from "@/lib/auth";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { audit, notify } from "./helpers";
+import { decryptSecret, encryptSecret } from "@/lib/crypto/secrets";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 const ROLES = ["TECH", "SALES_PM", "OFFICE", "ADMIN"] as const;
@@ -76,12 +77,20 @@ export async function configureOrgMemory(formData: FormData) {
   const session = await requireSession();
   if (!can(session.role, "integrations.manage")) throw new Error("Not allowed");
   const gatewayUrl = str(formData, "gatewayUrl");
-  const token = str(formData, "token");
+  const submittedToken = str(formData, "token");
   const namespace = str(formData, "namespace") || "plumber_app";
-  const connected = Boolean(gatewayUrl && token);
+
+  // Keep the existing (encrypted) token when the field is left blank on re-save.
+  const [existingRow] = await withTenant(session.organizationId, (tx) =>
+    tx.select().from(t.integrationConnections).where(eq(t.integrationConnections.provider, "ORGMEMORY"))
+  );
+  const existingToken = (existingRow?.config as { token?: string } | undefined)?.token ?? "";
+  const plainToken = submittedToken || (existingToken ? decryptSecret(existingToken) : "");
+  const connected = Boolean(gatewayUrl && plainToken);
   const values = {
     status: (connected ? "CONNECTED" : "DISCONNECTED") as "CONNECTED" | "DISCONNECTED",
-    config: { gatewayUrl, token, namespace },
+    // The MCP access token is a secret — store it encrypted at rest.
+    config: { gatewayUrl, token: plainToken ? encryptSecret(plainToken) : "", namespace },
     lastSyncAt: connected ? new Date() : null,
   };
   await withTenant(session.organizationId, async (tx) => {

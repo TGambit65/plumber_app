@@ -6,6 +6,7 @@ import { can } from "@/lib/permissions";
 import { audit } from "@/lib/actions/helpers";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { encryptSecret, isEncrypted } from "@/lib/crypto/secrets";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 
@@ -34,12 +35,19 @@ export async function configureSso(formData: FormData) {
   const clientSecret = str(formData, "clientSecret");
   if (!issuerUrl || !clientId) return;
 
-  // If the secret field is left blank on an update, keep the existing secret.
+  // If the secret field is left blank on an update, keep the existing secret
+  // (already encrypted at rest). A newly-entered secret is encrypted here.
   const existing = await db.query.organizations.findFirst({
     where: eq(t.organizations.id, session.organizationId),
     columns: { ssoClientSecret: true },
   });
-  const secret = clientSecret || existing?.ssoClientSecret || "";
+  const secret = clientSecret
+    ? encryptSecret(clientSecret)
+    : existing?.ssoClientSecret
+      ? isEncrypted(existing.ssoClientSecret)
+        ? existing.ssoClientSecret
+        : encryptSecret(existing.ssoClientSecret) // migrate legacy plaintext on touch
+      : "";
 
   await db
     .update(t.organizations)

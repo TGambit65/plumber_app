@@ -8,6 +8,7 @@ import { can } from "@/lib/permissions";
 import { audit, logActivity, notify } from "./helpers";
 import { getConnector } from "@/lib/connectors/providers";
 import type { Connector, ConnectorConfig, ExternalLead } from "@/lib/connectors/types";
+import { decryptConfig, encryptConfig } from "@/lib/connectors/secret-config";
 import { getKnowledgeStore } from "@/lib/knowledge/store";
 
 /**
@@ -29,8 +30,20 @@ async function ensureIntegrationsAdmin() {
 
 type ConnectionRow = typeof t.integrationConnections.$inferSelect;
 
+/**
+ * Read a stored config with its SECRET fields DECRYPTED for in-app use.
+ * Legacy plaintext rows pass through unchanged (lazy migration).
+ */
 function rowConfig(row: ConnectionRow | null | undefined): ConnectorConfig {
-  return ((row?.config ?? {}) as ConnectorConfig) || {};
+  const raw = ((row?.config ?? {}) as ConnectorConfig) || {};
+  const connector = row?.provider ? getConnector(row.provider) : undefined;
+  return connector ? decryptConfig(connector.descriptor, raw) : raw;
+}
+
+/** Encrypt a config's secret fields for storage (provider descriptor drives which). */
+function encryptForStore(provider: string, config: Record<string, unknown>): Record<string, unknown> {
+  const connector = getConnector(provider);
+  return connector ? (encryptConfig(connector.descriptor, config as ConnectorConfig) as Record<string, unknown>) : config;
 }
 
 /** Upsert the per-org connection row for a provider (unique org+provider). */
@@ -39,6 +52,8 @@ async function upsertConnection(
   provider: string,
   values: { status: "CONNECTED" | "DISCONNECTED" | "ERROR"; config: Record<string, unknown>; lastSyncAt?: Date | null }
 ) {
+  // Encrypt secrets at the storage boundary — callers pass plaintext config.
+  values = { ...values, config: encryptForStore(provider, values.config) };
   await withTenant(organizationId, async (tx) => {
     const [existing] = await tx
       .select()
@@ -72,9 +87,22 @@ export async function configureConnector(formData: FormData) {
   const connector = getConnector(provider);
   if (!connector) return;
 
+  // Secret fields are masked in the UI (never pre-filled with ciphertext), so a
+  // BLANK secret on re-save means "keep the existing one" — load + decrypt it.
+  const existing = await loadConnection(session.organizationId, provider);
+  const existingConfig = rowConfig(existing);
+  const secretFieldKeys = new Set(
+    connector.descriptor.configFields.filter((f) => f.kind === "password").map((f) => f.key)
+  );
+
   const config: Record<string, string> = {};
   for (const field of connector.descriptor.configFields) {
-    config[field.key] = str(formData, field.key);
+    const submitted = str(formData, field.key);
+    if (!submitted && secretFieldKeys.has(field.key) && typeof existingConfig[field.key] === "string") {
+      config[field.key] = existingConfig[field.key] as string; // keep existing secret
+    } else {
+      config[field.key] = submitted;
+    }
   }
 
   const health = await connector.health(config);
@@ -145,7 +173,7 @@ export async function testConnector(formData: FormData) {
       .update(t.integrationConnections)
       .set({
         status: health.ok ? "CONNECTED" : "ERROR",
-        config: storedConfig,
+        config: encryptForStore(provider, storedConfig),
         lastSyncAt: health.ok ? new Date() : row.lastSyncAt,
       })
       .where(eq(t.integrationConnections.id, row.id))
@@ -217,7 +245,7 @@ export async function syncCrmNow(formData: FormData) {
     await withTenant(session.organizationId, (tx) =>
       tx
         .update(t.integrationConnections)
-        .set({ status: "ERROR", config: { ...config, lastError: message } })
+        .set({ status: "ERROR", config: encryptForStore(provider, { ...config, lastError: message }) })
         .where(eq(t.integrationConnections.id, row.id))
     );
     await audit(session.userId, "SYNC_FAILED", "Integration", provider, { message });
@@ -257,7 +285,7 @@ export async function syncCrmNow(formData: FormData) {
     delete clearedConfig.lastError;
     await tx
       .update(t.integrationConnections)
-      .set({ status: "CONNECTED", lastSyncAt: new Date(), config: clearedConfig })
+      .set({ status: "CONNECTED", lastSyncAt: new Date(), config: encryptForStore(provider, clearedConfig) })
       .where(eq(t.integrationConnections.id, row.id));
   });
 

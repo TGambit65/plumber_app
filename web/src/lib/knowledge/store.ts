@@ -1,6 +1,7 @@
 import "server-only";
 import { t, withTenant } from "@/db";
 import { desc, ilike, or, eq } from "drizzle-orm";
+import { decryptSecret } from "@/lib/crypto/secrets";
 
 export type KbHit = {
   id: string;
@@ -221,7 +222,7 @@ export async function getKnowledgeStore(organizationId: string): Promise<Knowled
   if (conn?.status === "CONNECTED" && cfg.gatewayUrl && cfg.token) {
     return new OrgMemoryStore({
       gatewayUrl: cfg.gatewayUrl,
-      token: cfg.token,
+      token: decryptSecret(cfg.token), // decrypt the at-rest MCP access token
       organizationId, // tenant identity on every OrgMemory call
       department: cfg.department,
       classification: cfg.classification,

@@ -390,17 +390,25 @@ function ConnectorCard({ connector, conn }: { connector: Connector; conn?: Conne
           </summary>
           <form action={configureConnector} className="space-y-2 border-t border-slate-100 p-3">
             <input type="hidden" name="provider" value={d.provider} />
-            {d.configFields.map((f) => (
-              <Field key={f.key} label={`${f.label}${f.required ? "" : " (optional)"}`}>
-                <Input
-                  name={f.key}
-                  type={f.kind === "password" ? "password" : f.kind === "url" ? "url" : "text"}
-                  defaultValue={cfg[f.key] ?? ""}
-                  placeholder={f.placeholder}
-                  required={f.required}
-                />
-              </Field>
-            ))}
+            {d.configFields.map((f) => {
+              // Secrets are encrypted at rest — never render the value. When one
+              // is already set, show a "leave blank to keep" hint and drop the
+              // required flag so re-saving other fields keeps the stored secret.
+              const isSecret = f.kind === "password";
+              const hasStoredSecret = isSecret && Boolean(cfg[f.key]);
+              return (
+                <Field key={f.key} label={`${f.label}${f.required ? "" : " (optional)"}`}>
+                  <Input
+                    name={f.key}
+                    type={isSecret ? "password" : f.kind === "url" ? "url" : "text"}
+                    defaultValue={isSecret ? "" : (cfg[f.key] ?? "")}
+                    placeholder={hasStoredSecret ? "•••••••• (set — leave blank to keep)" : f.placeholder}
+                    required={f.required && !hasStoredSecret}
+                    autoComplete={isSecret ? "new-password" : undefined}
+                  />
+                </Field>
+              );
+            })}
             <Button type="submit" size="sm">{status === "CONNECTED" ? "Save & reconnect" : "Save & connect"}</Button>
           </form>
         </details>
@@ -462,7 +470,13 @@ async function IntegrationsTab({ organizationId }: { organizationId: string }) {
               <Input name="gatewayUrl" defaultValue={orgCfg.gatewayUrl ?? ""} placeholder="https://orgmemory.internal:8080" />
             </Field>
             <Field label="Access token (JWT)">
-              <Input name="token" type="password" defaultValue={orgCfg.token ?? ""} placeholder="Bearer token" />
+              <Input
+                name="token"
+                type="password"
+                defaultValue=""
+                placeholder={orgCfg.token ? "•••••••• (set — leave blank to keep)" : "Bearer token"}
+                autoComplete="new-password"
+              />
             </Field>
             <Field label="Namespace">
               <Input name="namespace" defaultValue={orgCfg.namespace ?? "plumber_app"} placeholder="plumber_app" />

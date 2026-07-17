@@ -11,6 +11,7 @@ import { can } from "@/lib/permissions";
 import { audit, notify } from "@/lib/actions/helpers";
 import { getConnector } from "@/lib/connectors/providers";
 import type { ConnectorConfig } from "@/lib/connectors/types";
+import { decryptConfig } from "@/lib/connectors/secret-config";
 import { readCartLines } from "@/lib/punchout/cxml";
 import { money } from "@/lib/format";
 
@@ -62,7 +63,10 @@ export async function startPunchout(formData: FormData) {
     return;
   }
 
-  const config = (row.config ?? {}) as ConnectorConfig;
+  // Decrypt secret fields (sharedSecret) for the live setup handshake.
+  const config = connector.descriptor
+    ? decryptConfig(connector.descriptor, (row.config ?? {}) as ConnectorConfig)
+    : ((row.config ?? {}) as ConnectorConfig);
   const buyerCookie = randomUUID();
 
   await withTenant(session.organizationId, (tx) =>

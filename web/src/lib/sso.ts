@@ -3,6 +3,7 @@ import { t, withTenant } from "@/db";
 import { and, eq } from "drizzle-orm";
 import type { Role } from "@/lib/auth";
 import { jwtVerify, createRemoteJWKSet, decodeProtectedHeader } from "jose";
+import { decryptSecret } from "@/lib/crypto/secrets";
 
 export {
   SSO_TXN_COOKIE,
@@ -164,7 +165,7 @@ export async function exchangeAndVerify(
         code,
         redirect_uri: redirectUri,
         client_id: org.ssoClientId ?? "",
-        client_secret: org.ssoClientSecret ?? "",
+        client_secret: org.ssoClientSecret ? decryptSecret(org.ssoClientSecret) : "",
         code_verifier: codeVerifier,
       }),
       // Never hang the login request on a slow/unreachable IdP.

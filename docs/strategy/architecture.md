@@ -258,6 +258,30 @@ All previously listed depth items are now DONE and verified:
   mock supplier (`scripts/mock-supplier.mjs`): full loop, markup math,
   cross-tenant 404, forged-cookie 404.
 
+## Security hardening
+
+- **Secrets encrypted at rest**: all stored credentials — connector config
+  secrets (API keys, OAuth tokens, cXML shared secrets), per-org SSO client
+  secrets, and the OrgMemory MCP access token — are encrypted with AES-256-GCM
+  (`src/lib/crypto/secrets.ts`, key from `APP_ENCRYPTION_KEY` with a
+  SESSION_SECRET-derived dev fallback). Encryption happens at the DB boundary:
+  connector secrets via a descriptor-driven `encryptConfig`/`decryptConfig`
+  (`src/lib/connectors/secret-config.ts` — only `kind:"password"` fields),
+  SSO/OrgMemory secrets inline in their actions. Legacy plaintext is tolerated
+  and upgraded on next write (lazy migration). The integrations UI never
+  renders a stored secret (masked field, "leave blank to keep"), and blank-on-
+  save preserves the existing secret. Verified end-to-end: a secret entered in
+  the UI is stored as `enc:v1:…` ciphertext (no plaintext in the DB) yet the
+  live health handshake still authenticates — and RLS blocks a context-less
+  read of the row entirely.
+- **RLS-coverage guard** (`src/db/verify-rls.ts`, `npm run db:verify-rls`):
+  auto-discovers every table carrying `organization_id` and asserts each has
+  row security ENABLED + FORCED + a policy. Fails (exit 1) if a new tenant
+  table is ever added without RLS. Currently green across all 51 tenant tables;
+  the two intentional non-RLS tables (organizations, trade_packs) have no
+  org_id and are correctly out of scope.
+
 Remaining niceties (non-blocking): at-rest offline-queue encryption,
 per-field merge UI, and OAuth token refresh for QuickBooks (config takes a
-live access token today).
+live access token today). **Deployment note:** set `APP_ENCRYPTION_KEY` (32
+bytes, hex or base64) and a strong `SESSION_SECRET` in production.
