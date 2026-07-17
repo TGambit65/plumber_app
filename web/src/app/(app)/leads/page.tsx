@@ -102,6 +102,32 @@ export default async function LeadsPage({
             <EmptyState title="No leads match" hint="Try clearing filters, or create a new lead." />
           </div>
         ) : (
+          <>
+          {/* Mobile: card list with thumb-sized rows */}
+          <ul className="divide-y divide-slate-100 md:hidden">
+            {leads.map((l) => (
+              <li key={l.id}>
+                <Link href={`/leads/${l.id}`} className="block px-4 py-3 active:bg-slate-50">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-medium text-slate-900">{l.title}</span>
+                    <span className="shrink-0 font-medium tabular-nums text-slate-700">{money(l.estValueCents)}</span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <Badge tone={leadStageTone[l.stage]}>{statusLabel(l.stage)}</Badge>
+                    <SourceBadge source={l.source} />
+                    <SlaBadge respondBy={l.respondBy} firstTouchAt={l.firstTouchAt} />
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {l.contactName} · {l.phone ?? l.email ?? "no contact info"}
+                    {l.assignedTo ? ` · ${l.assignedTo.name.split(" ")[0]}` : " · Unassigned"}
+                    {l.techFlagged && l.spiffCents ? ` · 💰 ${money(l.spiffCents)} spiff` : ""}
+                  </div>
+                </Link>
+              </li>
+            ))}
+          </ul>
+          {/* Desktop: full table */}
+          <div className="hidden md:block">
           <Table>
             <THead cols={["Lead", "Stage", "Source", "Contact", "Est. value", "Rep", "SLA"]} />
             <tbody>
@@ -148,6 +174,8 @@ export default async function LeadsPage({
               ))}
             </tbody>
           </Table>
+          </div>
+          </>
         )}
       </Card>
     </div>

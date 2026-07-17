@@ -34,11 +34,9 @@ describe("role permission bundles (docs/02 matrix)", () => {
   });
 
   it("admin has every permission any role has", () => {
-    const all = new Set([
-      ...ROLE_PERMISSIONS.TECH,
-      ...ROLE_PERMISSIONS.SALES_PM,
-      ...ROLE_PERMISSIONS.OFFICE,
-    ]);
+    const all = Array.from(
+      new Set([...ROLE_PERMISSIONS.TECH, ...ROLE_PERMISSIONS.SALES_PM, ...ROLE_PERMISSIONS.OFFICE])
+    );
     for (const p of all) {
       expect(can("ADMIN", p)).toBe(true);
     }

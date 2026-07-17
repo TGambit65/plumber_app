@@ -111,35 +111,40 @@ export default async function CockpitPage() {
                         ? { href: `/leads/${f.lead.id}`, label: f.lead.title }
                         : null;
                     return (
-                      <li key={f.id} className="flex items-center gap-3 px-4 py-3">
-                        <Badge tone={f.channel === "SMS" ? "cyan" : f.channel === "EMAIL" ? "violet" : "blue"}>
-                          {f.channel === "SMS" ? "💬" : f.channel === "EMAIL" ? "✉️" : "📞"} {f.channel}
-                        </Badge>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm text-slate-800">{f.body}</p>
-                          <p className="mt-0.5 text-xs text-slate-500">
-                            {target ? (
-                              <Link href={target.href} className="text-blue-600 hover:underline">
-                                {target.label}
-                              </Link>
-                            ) : null}
-                            <span className={overdue ? "ml-2 font-medium text-red-600" : "ml-2"}>
-                              due {fmtTime(f.dueAt)} {overdue ? "· overdue" : ""}
-                            </span>
-                          </p>
+                      <li key={f.id} className="px-4 py-3">
+                        <div className="flex items-start gap-2">
+                          <Badge tone={f.channel === "SMS" ? "cyan" : f.channel === "EMAIL" ? "violet" : "blue"}>
+                            {f.channel === "SMS" ? "💬" : f.channel === "EMAIL" ? "✉️" : "📞"} {f.channel}
+                          </Badge>
+                          <div className="min-w-0 flex-1">
+                            <p className="line-clamp-2 text-sm text-slate-800 sm:truncate">{f.body}</p>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              {target ? (
+                                <Link href={target.href} className="text-blue-600 hover:underline">
+                                  {target.label}
+                                </Link>
+                              ) : null}
+                              <span className={overdue ? "ml-2 font-medium text-red-600" : "ml-2"}>
+                                due {fmtTime(f.dueAt)} {overdue ? "· overdue" : ""}
+                              </span>
+                            </p>
+                          </div>
                         </div>
-                        <form action={markFollowUpSent}>
-                          <input type="hidden" name="followUpId" value={f.id} />
-                          <Button size="sm" variant="success">
-                            ✓ Mark sent
-                          </Button>
-                        </form>
-                        <form action={skipFollowUp}>
-                          <input type="hidden" name="followUpId" value={f.id} />
-                          <Button size="sm" variant="ghost" title="Skip this touch">
-                            Skip
-                          </Button>
-                        </form>
+                        {/* Actions on their own row on phones — full-width thumb targets */}
+                        <div className="mt-2 flex items-center gap-2">
+                          <form action={markFollowUpSent} className="flex-1 sm:flex-none">
+                            <input type="hidden" name="followUpId" value={f.id} />
+                            <Button size="sm" variant="success" className="h-10 w-full sm:h-8 sm:w-auto">
+                              ✓ Mark sent
+                            </Button>
+                          </form>
+                          <form action={skipFollowUp}>
+                            <input type="hidden" name="followUpId" value={f.id} />
+                            <Button size="sm" variant="ghost" title="Skip this touch" className="h-10 sm:h-8">
+                              Skip
+                            </Button>
+                          </form>
+                        </div>
                       </li>
                     );
                   })}

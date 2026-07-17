@@ -54,6 +54,39 @@ export default async function EstimatesPage() {
             <EmptyState title="No estimates yet" hint="Convert a lead to start a good-better-best proposal." />
           </div>
         ) : (
+          <>
+          {/* Mobile: card list */}
+          <ul className="divide-y divide-slate-100 md:hidden">
+            {estimates.map((e) => {
+              const opt =
+                e.options.find((o) => o.selected) ?? [...e.options].sort((a, b) => a.sortOrder - b.sortOrder)[0];
+              const total = opt ? lineTotal(opt.items) : 0;
+              const pending = e.followUps.filter((f) => f.status === "PENDING").length;
+              return (
+                <li key={e.id}>
+                  <Link href={`/estimates/${e.id}`} className="block px-4 py-3 active:bg-slate-50">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="font-medium text-blue-600">{e.number}</span>
+                      <span className="shrink-0 font-semibold tabular-nums">{money(total)}</span>
+                    </div>
+                    <div className="mt-0.5 text-sm text-slate-700">{e.customer.name}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <Badge tone={estimateStatusTone[e.status]}>{statusLabel(e.status)}</Badge>
+                      {e.viewCount >= 2 ? <Badge tone="amber">👁 {e.viewCount}x viewed</Badge> : null}
+                      {pending > 0 ? <Badge tone="amber">⚡ {pending} pending</Badge> : null}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {e.sentAt ? `sent ${fmtDate(e.sentAt)}` : `created ${fmtDate(e.createdAt)}`} ·{" "}
+                      {e.createdBy.name.split(" ")[0]}
+                      {e.lastViewedAt ? ` · viewed ${timeAgo(e.lastViewedAt)}` : ""}
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+          {/* Desktop: full table */}
+          <div className="hidden md:block">
           <Table>
             <THead cols={["Estimate", "Customer", "Status", "Total", "Engagement", "Follow-up automation", "Rep"]} />
             <tbody>
@@ -111,6 +144,8 @@ export default async function EstimatesPage() {
               })}
             </tbody>
           </Table>
+          </div>
+          </>
         )}
       </Card>
     </div>
