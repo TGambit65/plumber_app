@@ -63,14 +63,14 @@ async function main() {
   const packs = await db
     .insert(t.tradePacks)
     .values([
-      { key: "plumbing", name: "Plumbing", description: "Reference trade pack: water heaters, drains, repipe, fixtures." },
-      { key: "hvac", name: "HVAC", description: "Heating, ventilation & air conditioning." },
-      { key: "sewer", name: "Septic / Sewer", description: "Camera inspection, jetting, line repair." },
+      { key: "plumbing", name: "Plumbing", description: "Reference trade pack: water heaters, drains, repipe, fixtures.", config: { jobTypes: ["Water Heater Replacement", "Water Heater Service", "Drain Clearing", "Leak Repair", "Toilet Install", "Faucet Install", "Sump Pump Install", "Repipe", "Gas Line"] } },
+      { key: "hvac", name: "HVAC", description: "Heating, ventilation & air conditioning.", config: { jobTypes: ["AC Tune-Up", "RTU Maintenance", "Furnace Repair", "Mini-Split Install", "Refrigerant Recharge"] } },
+      { key: "sewer", name: "Septic / Sewer", description: "Camera inspection, jetting, line repair.", config: { jobTypes: ["Camera Inspection", "Hydro-Jetting", "Sewer Line Repair", "Septic Pumping"] } },
       { key: "electrical", name: "Electrical", description: "Panels, permits, service upgrades." },
       { key: "restoration", name: "Restoration", description: "Water/fire/mold — insurance-heavy." },
       { key: "roofing", name: "Roofing", description: "Insurance-heavy; claim-linked documentation." },
-      { key: "fuel_equipment", name: "Fuel Equipment", description: "UST/dispenser/cardlock — design partner Mascott." },
-      { key: "aa_field_ops", name: "AA Field-Ops", description: "American Automators dogfood: Acorn tiers + on-prem installs." },
+      { key: "fuel_equipment", name: "Fuel Equipment", description: "UST/dispenser/cardlock — design partner Mascott.", config: { jobTypes: ["Dispenser Service", "UST Tank Test", "Cardlock Maintenance", "Leak Detection Test"] } },
+      { key: "aa_field_ops", name: "AA Field-Ops", description: "American Automators dogfood: Acorn tiers + on-prem installs.", config: { jobTypes: ["Site Survey", "Acorn Starter Install", "Acorn Pro Install", "Acorn Enterprise Install", "On-Prem Hardware Service", "Network Commissioning"] } },
     ])
     .returning();
   const packByKey = Object.fromEntries(packs.map((p) => [p.key, p]));
@@ -760,11 +760,78 @@ async function main() {
     { name: "OH HVAC Contractor License", holderType: "USER", userId: sAdmin.id, certificateNumber: "HV-30215", issuingAuthority: "Ohio Dept. of Commerce", issuedAt: daysFromNow(-300), expiresAt: daysFromNow(65) },
   ]);
 
-  console.log("✅ Seed complete (2 orgs).");
+  // ── Org C: American Automators field-ops (dogfood — constraint 12) ─────────
+  // Proves the core serves AA's own ops with zero plumbing/insurance leakage.
+  const [aaOrg] = await db
+    .insert(t.organizations)
+    .values([{ name: "American Automators", slug: "american-automators", brandPrimary: "#0057FF" }])
+    .returning();
+  await setOrg(aaOrg.id);
+  console.log("American Automators (org C)…");
+  await db.insert(t.organizationTradePacks).values([
+    { organizationId: aaOrg.id, tradePackId: packByKey["aa_field_ops"].id },
+  ]);
+  const [aaAdmin, aaSales, aaTech] = await db
+    .insert(t.users)
+    .values([
+      { email: "owner@americanautomators.demo", name: "Kelly Thoder", role: "ADMIN", passwordHash: hash, phone: "555-0300" },
+      { email: "sales@americanautomators.demo", name: "Devon Price", role: "SALES_PM", passwordHash: hash, phone: "555-0301" },
+      { email: "tech@americanautomators.demo", name: "Sam Reyes", role: "TECH", passwordHash: hash, phone: "555-0302" },
+    ])
+    .returning();
+  const [aaCust] = await db
+    .insert(t.customers)
+    .values([{ name: "Mascott Fuel Equipment", type: "COMMERCIAL", company: "Mascott Equipment Co.", email: "kevin@mascott.demo", phone: "555-0400", notes: "Design partner — fuel vertical" }])
+    .returning();
+  const [aaProp] = await db
+    .insert(t.properties)
+    .values([{ customerId: aaCust.id, label: "Mascott HQ", address: "2110 Industrial Ave", city: "Portland", state: "OR", zip: "97210", accessNotes: "Server room badge access via office manager" }])
+    .returning();
+  await db.insert(t.equipment).values([
+    { propertyId: aaProp.id, kind: "On-Prem AI Server", brand: "Acorn", model: "Acorn Pro G2", serial: "ACN-P2-00147", installedAt: daysFromNow(-30), notes: "Warranty: 3yr parts+labor from install" },
+  ]);
+  await db.insert(t.priceBookItems).values([
+    { code: "ACN-SURVEY", name: "Site Survey — Network & Power Assessment", category: "AA Field-Ops", unitCostCents: $(80), unitPriceCents: $(450), laborHours: 3 },
+    { code: "ACN-STARTER", name: "Acorn Starter — On-Prem Install", category: "AA Field-Ops", unitCostCents: $(2200), unitPriceCents: $(6500), laborHours: 6 },
+    { code: "ACN-PRO", name: "Acorn Pro — On-Prem Install", category: "AA Field-Ops", unitCostCents: $(5400), unitPriceCents: $(14500), laborHours: 10 },
+    { code: "ACN-ENT", name: "Acorn Enterprise — On-Prem Install", category: "AA Field-Ops", unitCostCents: $(11800), unitPriceCents: $(32000), laborHours: 24 },
+  ]);
+  await db
+    .insert(t.leads)
+    .values([{ source: "REFERRAL", stage: "ESTIMATE_SCHEDULED", title: "Acorn Pro install — Mascott branch office", contactName: "Kevin Mascott", phone: "555-0400", customerId: aaCust.id, propertyId: aaProp.id, estValueCents: $(14950), assignedToId: aaSales.id, firstTouchAt: daysFromNow(-3), lastContactAt: daysFromNow(-1) }])
+    .returning();
+  await db.insert(t.jobs).values([
+    { number: "AA-1001", status: "SCHEDULED", priority: "NORMAL", jobType: "Site Survey", customerId: aaCust.id, propertyId: aaProp.id, assignedToId: aaTech.id, scheduledAt: daysFromNow(1, 10), description: "Pre-install survey: rack space, power, network drops for Acorn Pro." },
+  ]);
+  await db.insert(t.inspectionTemplates).values([
+    {
+      name: "Acorn On-Prem Install Checklist",
+      tradePackKey: "aa_field_ops",
+      description: "Commissioning checklist for on-prem hardware installs.",
+      steps: [
+        { key: "rack", label: "Rack mounted & secured", kind: "check", required: true },
+        { key: "power", label: "Dual power feeds connected (UPS verified)", kind: "check", required: true },
+        { key: "serial", label: "Chassis serial recorded", kind: "note", required: true },
+        { key: "network", label: "Network link negotiated (Gbps)", kind: "measurement", unit: "Gbps", required: true },
+        { key: "photo", label: "Photo of completed rack install", kind: "photo", required: true },
+        { key: "handoff", label: "Customer walkthrough completed", kind: "check", required: true },
+      ],
+    },
+  ]);
+  await db.insert(t.kbArticles).values([
+    { slug: "acorn-install-sop", title: "SOP: Acorn On-Prem Installation", category: "SOP", tags: ["acorn", "install"], authorId: aaAdmin.id, verifiedAt: daysFromNow(-10), body: "## Install flow\n1. Site survey sign-off on file\n2. Rack, power (UPS), dual network drops\n3. Record chassis serial in Equipment\n4. Run commissioning checklist (Compliance)\n5. Customer walkthrough + handoff doc" },
+  ]);
+  await db.insert(t.integrationConnections).values([
+    { provider: "ORGMEMORY", status: "DISCONNECTED" },
+  ]);
+
+  console.log("✅ Seed complete (3 orgs).");
   console.log("Apex Plumbing (org A) — password demo1234:");
   console.log("  owner@apexplumbing.demo · office@ · sales@ · tech@");
   console.log("Summit HVAC (org B) — password demo1234:");
   console.log("  owner@summithvac.demo · tech@summithvac.demo");
+  console.log("American Automators (org C) — password demo1234:");
+  console.log("  owner@americanautomators.demo · sales@ · tech@");
   await client.end();
   process.exit(0);
 }

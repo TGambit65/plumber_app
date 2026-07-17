@@ -78,7 +78,12 @@ export async function bookJob(formData: FormData) {
   if (!can(session.role, "dispatch.manage")) throw new Error("Not allowed");
   const customerId = str(formData, "customerId");
   const propertyId = str(formData, "propertyId");
-  const jobType = str(formData, "jobType");
+  // Pack-composed job type: the form offers a select populated from the org's
+  // enabled trade packs (enabledJobTypes) plus a free-text "Other" fallback.
+  // A non-empty custom value wins; otherwise use the selected pack job type.
+  const jobTypeSelect = str(formData, "jobType");
+  const jobTypeOther = str(formData, "jobTypeOther");
+  const jobType = jobTypeOther || (jobTypeSelect === "__OTHER__" ? "" : jobTypeSelect);
   const priority = pick(str(formData, "priority"), JOB_PRIORITIES, "NORMAL");
   const description = str(formData, "description");
   const scheduledStr = str(formData, "scheduledAt");

@@ -5,7 +5,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { t, withTenant, type TenantDb } from "@/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can, type Permission } from "@/lib/permissions";
 import { audit, logActivity, notify } from "@/lib/actions/helpers";
@@ -17,6 +17,30 @@ async function guard(permission: Permission) {
   const session = await requireSession();
   if (!can(session.role, permission)) throw new Error("You do not have permission to do that.");
   return session;
+}
+
+/**
+ * Approval-gated egress (constraint 8): customer-facing sends QUEUE an
+ * outbound_messages row instead of firing. Ping the people who can approve
+ * (approvals.manage lives on OFFICE + ADMIN) so it doesn't sit unseen.
+ */
+async function notifyApprovers(
+  organizationId: string,
+  exceptUserId: string,
+  title: string,
+  body: string,
+  href = "/approvals"
+) {
+  const approvers = await withTenant(organizationId, (tx) =>
+    tx
+      .select({ id: t.users.id })
+      .from(t.users)
+      .where(and(eq(t.users.active, true), inArray(t.users.role, ["OFFICE", "ADMIN"])))
+  );
+  for (const a of approvers) {
+    if (a.id === exceptUserId) continue;
+    await notify(a.id, title, body, href);
+  }
 }
 
 function str(fd: FormData, key: string): string {
@@ -233,24 +257,84 @@ export async function convertLeadToEstimate(formData: FormData) {
 
 // ── Follow-ups ───────────────────────────────────────────────────────────────
 
+/**
+ * Approval-gated (constraint 8): "Mark sent" now QUEUES a FOLLOW_UP_TOUCH for
+ * office/owner approval rather than firing the SMS/email itself. The touch is
+ * customer-facing, so it waits behind the same gate as an estimate send.
+ * Signature unchanged — callers (cockpit, lead & estimate detail) are untouched.
+ */
 export async function markFollowUpSent(formData: FormData) {
   const session = await requireSession();
   const id = str(formData, "followUpId");
   const fu = await withTenant(session.organizationId, async (tx) => {
-    const fu = await tx.query.followUps.findFirst({ where: eq(t.followUps.id, id), with: { estimate: true } });
+    const fu = await tx.query.followUps.findFirst({
+      where: eq(t.followUps.id, id),
+      with: { estimate: { with: { customer: true } }, lead: true },
+    });
     if (!fu) throw new Error("Follow-up not found");
-    await tx.update(t.followUps).set({ status: "SENT", sentAt: new Date() }).where(eq(t.followUps.id, id));
+    if (fu.status !== "PENDING") throw new Error("This follow-up is no longer pending.");
+    // Don't double-queue if a request is already awaiting approval.
+    const existing = await tx.query.outboundMessages.findFirst({
+      where: and(
+        eq(t.outboundMessages.followUpId, id),
+        eq(t.outboundMessages.status, "PENDING_APPROVAL")
+      ),
+    });
+    if (existing) return fu;
+    const recipient =
+      fu.estimate?.customer?.email ??
+      fu.estimate?.customer?.phone ??
+      fu.lead?.email ??
+      fu.lead?.phone ??
+      null;
+    await tx.insert(t.outboundMessages).values({
+      kind: "FOLLOW_UP_TOUCH",
+      status: "PENDING_APPROVAL",
+      customerId: fu.estimate?.customerId ?? null,
+      recipient,
+      subject: `Follow-up ${fu.channel} touch`,
+      body: fu.body,
+      followUpId: fu.id,
+      estimateId: fu.estimateId ?? null,
+      requestedById: session.userId,
+    });
+    return fu;
+  });
+  await notifyApprovers(
+    session.organizationId,
+    session.userId,
+    "✉️ Follow-up touch awaiting approval",
+    `${fu.channel} touch queued by ${session.name}.`
+  );
+  revalidateSales(fu.leadId ?? fu.estimate?.leadId ?? undefined, fu.estimateId ?? undefined);
+}
+
+/**
+ * Executes an approved FOLLOW_UP_TOUCH — the real "send". Called by
+ * approveOutbound (@/lib/actions/approvals) once an approver signs off.
+ * actorUserId is the original requester, so the timeline credits them.
+ */
+export async function reallySendFollowUp(organizationId: string, followUpId: string, actorUserId: string) {
+  const fu = await withTenant(organizationId, async (tx) => {
+    const fu = await tx.query.followUps.findFirst({
+      where: eq(t.followUps.id, followUpId),
+      with: { estimate: true },
+    });
+    if (!fu) throw new Error("Follow-up not found");
+    if (fu.status === "SENT") return fu;
+    await tx.update(t.followUps).set({ status: "SENT", sentAt: new Date() }).where(eq(t.followUps.id, followUpId));
     return fu;
   });
   const kind = fu.channel === "SMS" ? "SMS" : fu.channel === "EMAIL" ? "EMAIL" : "CALL";
   await logActivity({
     kind,
     body: `Follow-up ${fu.channel.toLowerCase()} sent: ${fu.body.slice(0, 120)}`,
-    userId: session.userId,
+    userId: actorUserId,
     leadId: fu.leadId ?? fu.estimate?.leadId ?? undefined,
     customerId: fu.estimate?.customerId ?? undefined,
   });
   revalidateSales(fu.leadId ?? fu.estimate?.leadId ?? undefined, fu.estimateId ?? undefined);
+  return fu;
 }
 
 export async function skipFollowUp(formData: FormData) {
@@ -358,10 +442,62 @@ function followUpCadence(estimateNumber: string, contact: string): { day: number
   ];
 }
 
+/**
+ * Approval-gated (constraint 8): the estimate no longer flips to SENT here.
+ * It QUEUES an ESTIMATE_SEND for owner/office approval; approving it runs
+ * reallySendEstimate (below). Same name/signature so the estimate page's
+ * "Mark sent" button is untouched — its effect is now "queue for approval",
+ * and we redirect the requester to the approvals queue.
+ */
 export async function markEstimateSent(formData: FormData) {
   const session = await guard("estimates.create");
   const estimateId = str(formData, "estimateId");
-  const est = await withTenant(session.organizationId, async (tx) => {
+  await withTenant(session.organizationId, async (tx) => {
+    const est = await tx.query.estimates.findFirst({
+      where: eq(t.estimates.id, estimateId),
+      with: { customer: true },
+    });
+    if (!est) throw new Error("Estimate not found");
+    if (est.status !== "DRAFT") throw new Error("This estimate has already been sent.");
+    // Don't double-queue if a request is already awaiting approval.
+    const existing = await tx.query.outboundMessages.findFirst({
+      where: and(
+        eq(t.outboundMessages.estimateId, estimateId),
+        eq(t.outboundMessages.status, "PENDING_APPROVAL")
+      ),
+    });
+    if (existing) return;
+    const recipient = est.customer.email ?? est.customer.phone ?? null;
+    await tx.insert(t.outboundMessages).values({
+      kind: "ESTIMATE_SEND",
+      status: "PENDING_APPROVAL",
+      customerId: est.customerId,
+      recipient,
+      subject: `Estimate ${est.number}`,
+      body: `Send estimate ${est.number} to ${est.customer.name}. Approving delivers the proposal and starts the default 7-day follow-up sequence (5 SMS + 2 email).`,
+      estimateId: est.id,
+      requestedById: session.userId,
+    });
+  });
+  await notifyApprovers(
+    session.organizationId,
+    session.userId,
+    "✉️ Estimate send awaiting approval",
+    `${session.name} queued an estimate for delivery.`
+  );
+  await audit(session.userId, "QUEUE_OUTBOUND", "Estimate", estimateId, { kind: "ESTIMATE_SEND" });
+  revalidateSales(undefined, estimateId);
+  redirect("/approvals");
+}
+
+/**
+ * Executes an approved ESTIMATE_SEND — the real "send". Mirrors the pre-gate
+ * behaviour: flips the estimate to SENT, starts the 7-day follow-up cadence
+ * (only if not already present), and advances the lead. Called by
+ * approveOutbound (@/lib/actions/approvals). actorUserId is the requester.
+ */
+export async function reallySendEstimate(organizationId: string, estimateId: string, actorUserId: string) {
+  const est = await withTenant(organizationId, async (tx) => {
     const est = await tx.query.estimates.findFirst({
       where: eq(t.estimates.id, estimateId),
       with: { customer: true, lead: true },
@@ -370,29 +506,35 @@ export async function markEstimateSent(formData: FormData) {
     const now = new Date();
     await tx.update(t.estimates).set({ status: "SENT", sentAt: now }).where(eq(t.estimates.id, estimateId));
 
-    // Default-on follow-up automation: 7 touches over 7 days.
-    const cadence = followUpCadence(est.number, est.lead?.contactName ?? est.customer.name);
-    await tx.insert(t.followUps).values(
-      cadence.map((c) => {
-        const dueAt = new Date(now);
-        dueAt.setDate(dueAt.getDate() + c.day);
-        dueAt.setHours(c.hour, 0, 0, 0);
-        return { estimateId, channel: c.channel, status: "PENDING" as const, dueAt, body: c.body };
-      })
-    );
+    // Default-on follow-up automation: 7 touches over 7 days — only if not present.
+    const existingFollowUps = await tx.query.followUps.findMany({
+      where: eq(t.followUps.estimateId, estimateId),
+    });
+    if (existingFollowUps.length === 0) {
+      const cadence = followUpCadence(est.number, est.lead?.contactName ?? est.customer.name);
+      await tx.insert(t.followUps).values(
+        cadence.map((c) => {
+          const dueAt = new Date(now);
+          dueAt.setDate(dueAt.getDate() + c.day);
+          dueAt.setHours(c.hour, 0, 0, 0);
+          return { estimateId, channel: c.channel, status: "PENDING" as const, dueAt, body: c.body };
+        })
+      );
+    }
 
-    if (est.leadId) await applyLeadStage(tx, est.leadId, "ESTIMATE_SENT", session.userId);
+    if (est.leadId) await applyLeadStage(tx, est.leadId, "ESTIMATE_SENT", actorUserId);
     return est;
   });
 
   await logActivity({
     kind: "SYSTEM",
     body: `Estimate ${est.number} sent to ${est.customer.name} — 7-day follow-up sequence started (5 SMS + 2 email)`,
-    userId: session.userId,
+    userId: actorUserId,
     customerId: est.customerId,
     leadId: est.leadId ?? undefined,
   });
   revalidateSales(est.leadId ?? undefined, estimateId);
+  return est;
 }
 
 /** Demo hook: simulate the customer opening their proposal link. */

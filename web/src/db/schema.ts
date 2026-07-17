@@ -237,6 +237,9 @@ export const jobs = pgTable("jobs", {
   scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
   scheduledEnd: timestamp("scheduled_end", { withTimezone: true }),
   completedAt: timestamp("completed_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  deletedById: text("deleted_by_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -249,6 +252,9 @@ export const jobPhotos = pgTable("job_photos", {
   caption: text("caption"),
   takenById: text("taken_by_id").notNull().references(() => users.id),
   takenAt: timestamp("taken_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  deletedById: text("deleted_by_id"),
 });
 
 export const jobForms = pgTable("job_forms", {
@@ -259,6 +265,9 @@ export const jobForms = pgTable("job_forms", {
   required: boolean("required").notNull().default(false),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   data: jsonb("data"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  deletedById: text("deleted_by_id"),
 });
 
 export const timeEntries = pgTable("time_entries", {
@@ -269,6 +278,9 @@ export const timeEntries = pgTable("time_entries", {
   kind: timeEntryKindEnum("kind").notNull().default("WORK"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
   endedAt: timestamp("ended_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  deletedById: text("deleted_by_id"),
 });
 
 // ── Projects ─────────────────────────────────────────────────────────────────
@@ -519,6 +531,7 @@ export const activities = pgTable("activities", {
   jobId: text("job_id").references(() => jobs.id, { onDelete: "cascade" }),
   leadId: text("lead_id").references(() => leads.id, { onDelete: "cascade" }),
   projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -834,7 +847,10 @@ export const organizations = pgTable("organizations", {
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
   // Standalone-first: local auth by default; external SSO when configured.
-  ssoProvider: text("sso_provider"),
+  ssoProvider: text("sso_provider"), // e.g. "oidc"
+  ssoIssuerUrl: text("sso_issuer_url"),
+  ssoClientId: text("sso_client_id"),
+  ssoClientSecret: text("sso_client_secret"),
   brandPrimary: text("brand_primary").default("#0057FF"),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1043,4 +1059,49 @@ export const certificationsRelations = relations(certifications, ({ one }) => ({
   user: one(users, { fields: [certifications.userId], references: [users.id] }),
   equipmentRef: one(equipment, { fields: [certifications.equipmentId], references: [equipment.id] }),
   sourceInspection: one(inspections, { fields: [certifications.sourceInspectionId], references: [inspections.id] }),
+}));
+
+// ── Approval-gated egress (constraint 8) ─────────────────────────────────────
+// Nothing customer-facing leaves without owner/office approval. Licensed work
+// routes to a human holding a valid certification (requiredCertName).
+
+export const outboundStatusEnum = pgEnum("outbound_status", [
+  "PENDING_APPROVAL", "APPROVED_SENT", "REJECTED", "CANCELLED",
+]);
+export const outboundKindEnum = pgEnum("outbound_kind", [
+  "ESTIMATE_SEND", "FOLLOW_UP_TOUCH", "CUSTOMER_MESSAGE", "LICENSED_SIGNOFF",
+]);
+
+export const outboundMessages = pgTable("outbound_messages", {
+  id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
+  kind: outboundKindEnum("kind").notNull(),
+  status: outboundStatusEnum("status").notNull().default("PENDING_APPROVAL"),
+  // Who/what it's about:
+  customerId: text("customer_id").references(() => customers.id),
+  recipient: text("recipient"), // phone/email snapshot
+  subject: text("subject"),
+  body: text("body").notNull(),
+  // What executing the approval should do:
+  estimateId: text("estimate_id").references(() => estimates.id),
+  followUpId: text("follow_up_id").references(() => followUps.id),
+  jobId: text("job_id").references(() => jobs.id),
+  permitId: text("permit_id").references(() => permits.id),
+  // Licensed-work routing: only holders of a valid cert with this name (or ADMIN) may approve.
+  requiredCertName: text("required_cert_name"),
+  requestedById: text("requested_by_id").notNull().references(() => users.id),
+  approvedById: text("approved_by_id").references(() => users.id),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  rejectReason: text("reject_reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const outboundMessagesRelations = relations(outboundMessages, ({ one }) => ({
+  customer: one(customers, { fields: [outboundMessages.customerId], references: [customers.id] }),
+  estimate: one(estimates, { fields: [outboundMessages.estimateId], references: [estimates.id] }),
+  followUp: one(followUps, { fields: [outboundMessages.followUpId], references: [followUps.id] }),
+  job: one(jobs, { fields: [outboundMessages.jobId], references: [jobs.id] }),
+  permit: one(permits, { fields: [outboundMessages.permitId], references: [permits.id] }),
+  requestedBy: one(users, { fields: [outboundMessages.requestedById], references: [users.id] }),
+  approvedBy: one(users, { fields: [outboundMessages.approvedById], references: [users.id] }),
 }));

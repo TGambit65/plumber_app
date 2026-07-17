@@ -36,6 +36,8 @@ DECLARE
     -- knowledge & comms
     'kb_articles', 'activities', 'notifications',
     'conversations', 'conversation_participants', 'messages',
+    -- approval-gated egress
+    'outbound_messages',
     -- claims (PII-sensitive) & compliance
     'carriers', 'adjusters', 'claims', 'claim_supplements',
     'inspection_templates', 'inspections', 'certifications',

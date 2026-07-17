@@ -31,6 +31,7 @@ export type Permission =
   | "commissions.rules.manage"
   | "reports.company"
   | "reports.ar"
+  | "approvals.manage"
   | "claims.manage"
   | "inspections.run"
   | "compliance.manage"
@@ -71,6 +72,7 @@ const SALES_PM: Permission[] = [
 
 const OFFICE: Permission[] = [
   "schedule.view.all",
+  "approvals.manage",
   "claims.manage",
   "compliance.manage",
   "inspections.run",
@@ -95,6 +97,7 @@ const ADMIN: Permission[] = Array.from(
     ...SALES_PM,
     ...OFFICE,
     "estimates.discount.unlimited",
+    "approvals.manage",
     "claims.manage",
     "compliance.manage",
     "inspections.run",
@@ -162,6 +165,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "commissions.rules.manage": "Manage commission rules",
   "reports.company": "Company dashboards",
   "reports.ar": "AR reporting",
+  "approvals.manage": "Approve outbound messages & sign-offs",
   "claims.manage": "Manage insurance claims",
   "inspections.run": "Run inspections",
   "compliance.manage": "Manage compliance & certifications",
@@ -177,6 +181,7 @@ export const PERMISSION_GROUPS: { label: string; permissions: Permission[] }[] =
   { label: "Sales", permissions: ["leads.create", "pipeline.manage", "estimates.create", "estimates.discount.unlimited", "projects.manage"] },
   { label: "Field & money", permissions: ["jobs.work", "invoices.create", "payments.take", "payments.refund"] },
   { label: "Claims & compliance", permissions: ["claims.manage", "inspections.run", "compliance.manage"] },
+  { label: "Egress approvals", permissions: ["approvals.manage"] },
   { label: "Inventory & pricing", permissions: ["inventory.view", "inventory.manage", "pricebook.edit"] },
   { label: "Knowledge", permissions: ["kb.view", "kb.author"] },
   { label: "Money & reporting", permissions: ["commissions.view.own", "commissions.view.all", "commissions.rules.manage", "reports.company", "reports.ar"] },

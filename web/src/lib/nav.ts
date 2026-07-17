@@ -7,6 +7,7 @@ export type NavItem = { href: string; label: string; icon: string };
 export const NAV: Record<Role, NavItem[]> = {
   TECH: [
     { href: "/my-day", label: "My Day", icon: "🗓️" },
+    { href: "/field", label: "Field Mode", icon: "📴" },
     { href: "/inventory", label: "Truck Stock", icon: "🧰" },
     { href: "/kb", label: "Knowledge", icon: "📖" },
     { href: "/messages", label: "Messages", icon: "💬" },
@@ -26,6 +27,7 @@ export const NAV: Record<Role, NavItem[]> = {
   ],
   OFFICE: [
     { href: "/dispatch", label: "Dispatch", icon: "🚚" },
+    { href: "/approvals", label: "Approvals", icon: "✉️" },
     { href: "/jobs", label: "Jobs", icon: "🔧" },
     { href: "/customers", label: "Customers", icon: "👥" },
     { href: "/leads", label: "Leads", icon: "📥" },
@@ -39,6 +41,7 @@ export const NAV: Record<Role, NavItem[]> = {
   ADMIN: [
     { href: "/dashboard", label: "Dashboard", icon: "📈" },
     { href: "/dispatch", label: "Dispatch", icon: "🚚" },
+    { href: "/approvals", label: "Approvals", icon: "✉️" },
     { href: "/pipeline", label: "Pipeline", icon: "📊" },
     { href: "/jobs", label: "Jobs", icon: "🔧" },
     { href: "/projects", label: "Projects", icon: "🏗️" },
@@ -63,6 +66,7 @@ const PERMISSION_NAV: { permission: Permission; item: NavItem }[] = [
   { permission: "schedule.view.all", item: { href: "/dispatch", label: "Dispatch", icon: "🚚" } },
   { permission: "reports.ar", item: { href: "/invoices", label: "Invoices & AR", icon: "🧾" } },
   { permission: "claims.manage", item: { href: "/claims", label: "Claims", icon: "🛡️" } },
+  { permission: "approvals.manage", item: { href: "/approvals", label: "Approvals", icon: "✉️" } },
   { permission: "compliance.manage", item: { href: "/compliance", label: "Compliance", icon: "✅" } },
 ];
 

@@ -23,6 +23,18 @@ async function login(formData: FormData) {
   redirect(ROLE_HOME[user.role]);
 }
 
+// Federated login: send the browser to the per-org OIDC entry point, which
+// redirects to that org's IdP. Local email/password above stays the default.
+async function ssoRedirect(formData: FormData) {
+  "use server";
+  const slug = String(formData.get("slug") ?? "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9-]/g, "");
+  if (!slug) redirect("/login?error=sso");
+  redirect(`/auth/sso/${slug}`);
+}
+
 export default async function LoginPage({ searchParams }: { searchParams: { error?: string } }) {
   const session = await getSession();
   if (session) redirect(ROLE_HOME[session.role]);
@@ -37,7 +49,11 @@ export default async function LoginPage({ searchParams }: { searchParams: { erro
         </div>
 
         <div className="rounded-2xl bg-white p-6 shadow-xl">
-          {searchParams.error ? (
+          {searchParams.error === "sso" ? (
+            <p className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+              SSO sign-in unavailable for that workspace. Use email &amp; password below.
+            </p>
+          ) : searchParams.error ? (
             <p className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
               Invalid email or password.
             </p>
@@ -78,6 +94,28 @@ export default async function LoginPage({ searchParams }: { searchParams: { erro
               Sign in
             </button>
           </form>
+
+          {/* Optional SSO path — local auth above stays the default. */}
+          <div className="mt-5 border-t border-slate-100 pt-4">
+            <p className="mb-2 text-center text-[11px] font-medium uppercase tracking-wide text-slate-400">
+              Or sign in with your company workspace
+            </p>
+            <form action={ssoRedirect} className="flex gap-2">
+              <input
+                name="slug"
+                type="text"
+                autoComplete="organization"
+                className="h-10 flex-1 rounded-lg border border-slate-300 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="workspace slug (e.g. apex-plumbing)"
+              />
+              <button
+                type="submit"
+                className="h-10 shrink-0 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                Sign in with SSO
+              </button>
+            </form>
+          </div>
 
           <div className="mt-6 border-t border-slate-100 pt-4">
             <p className="mb-2 text-center text-xs font-medium uppercase tracking-wide text-slate-400">

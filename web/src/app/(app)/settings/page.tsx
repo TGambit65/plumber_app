@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { t, withTenant } from "@/db";
+import { headers } from "next/headers";
+import { db, t, withTenant } from "@/db";
 import { asc, desc, eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import type { Role } from "@/lib/auth";
@@ -30,6 +31,7 @@ import {
   syncCrmNow,
   testConnector,
 } from "@/lib/actions/connectors";
+import { configureSso, disableSso } from "@/lib/actions/sso";
 import { getConnector, listByCapability } from "@/lib/connectors/providers";
 import { CAPABILITY_LABELS, type Connector } from "@/lib/connectors/types";
 import {
@@ -53,12 +55,13 @@ import { money, timeAgo } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-const TABS = ["team", "integrations", "commissions", "audit", "company"] as const;
+const TABS = ["team", "integrations", "identity", "commissions", "audit", "company"] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
   team: "👥 Team",
   integrations: "🔌 Integrations",
+  identity: "🔐 SSO / Identity",
   commissions: "💵 Commissions",
   audit: "🧾 Audit log",
   company: "🏢 Company",
@@ -132,6 +135,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: { t
 
       {tab === "team" ? <TeamTab currentUserId={session.userId} organizationId={session.organizationId} /> : null}
       {tab === "integrations" ? <IntegrationsTab organizationId={session.organizationId} /> : null}
+      {tab === "identity" ? <IdentityTab organizationId={session.organizationId} /> : null}
       {tab === "commissions" ? <CommissionsTab organizationId={session.organizationId} /> : null}
       {tab === "audit" ? <AuditTab organizationId={session.organizationId} /> : null}
       {tab === "company" ? <CompanyTab /> : null}
@@ -567,6 +571,125 @@ async function IntegrationsTab({ organizationId }: { organizationId: string }) {
           </div>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+// ── SSO / Identity ───────────────────────────────────────────────────────────
+
+async function IdentityTab({ organizationId }: { organizationId: string }) {
+  // organizations is the tenant root (not RLS-scoped) → base client, scoped to
+  // the caller's own org id.
+  const org = await db.query.organizations.findFirst({
+    where: eq(t.organizations.id, organizationId),
+  });
+
+  const configured = Boolean(org?.ssoProvider === "oidc" && org?.ssoIssuerUrl && org?.ssoClientId);
+
+  // The callback URL admins register with their IdP. Derived from the request
+  // origin so it's correct in any environment.
+  const h = headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
+  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+  const origin = `${proto}://${host}`;
+  const callbackUrl = `${origin}/auth/sso/callback`;
+  const entryUrl = org?.slug ? `${origin}/auth/sso/${org.slug}` : `${origin}/auth/sso/<slug>`;
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-blue-200 bg-blue-50/50">
+        <CardBody className="text-sm text-slate-700">
+          ℹ️ <span className="font-medium">Local email &amp; password sign-in is always the default</span> and keeps working
+          whether or not SSO is configured. Configuring an OIDC provider below is purely additive — it lets members of
+          <span className="font-medium"> this workspace</span> sign in through your identity provider. SSO is per-org: your
+          IdP only ever resolves users inside your own organization.
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="🔐 OIDC Single Sign-On"
+          subtitle="Federate this workspace to an external identity provider (Okta, Entra ID, Auth0, Keycloak, …)."
+          action={<Badge tone={configured ? "green" : "slate"}>{configured ? "Configured" : "Not configured"}</Badge>}
+        />
+        <CardBody className="space-y-4">
+          {configured ? (
+            <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Provider</dt>
+                <dd className="mt-0.5 text-slate-800">OIDC</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Issuer URL</dt>
+                <dd className="mt-0.5 break-all text-slate-800">{org?.ssoIssuerUrl}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Client ID</dt>
+                <dd className="mt-0.5 break-all text-slate-800">{org?.ssoClientId}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Client secret</dt>
+                <dd className="mt-0.5 text-slate-800">{org?.ssoClientSecret ? "•••••••• (set)" : "— not set"}</dd>
+              </div>
+            </dl>
+          ) : null}
+
+          <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 text-xs text-slate-600">
+            <div className="mb-1 font-medium text-slate-700">Register these with your IdP</div>
+            <div className="space-y-1">
+              <div>
+                Redirect / callback URL:{" "}
+                <code className="break-all rounded bg-white px-1.5 py-0.5 text-[11px] text-slate-800">{callbackUrl}</code>
+              </div>
+              <div>
+                Workspace sign-in URL:{" "}
+                <code className="break-all rounded bg-white px-1.5 py-0.5 text-[11px] text-slate-800">{entryUrl}</code>
+              </div>
+            </div>
+          </div>
+
+          <form action={configureSso} className="grid gap-3 md:grid-cols-3">
+            <div className="md:col-span-3">
+              <Field label="Issuer URL">
+                <Input
+                  name="issuerUrl"
+                  type="url"
+                  required
+                  defaultValue={org?.ssoIssuerUrl ?? ""}
+                  placeholder="https://login.example.com"
+                />
+              </Field>
+            </div>
+            <Field label="Client ID">
+              <Input name="clientId" required defaultValue={org?.ssoClientId ?? ""} placeholder="oidc-client-id" />
+            </Field>
+            <div className="md:col-span-2">
+              <Field label={configured ? "Client secret (leave blank to keep current)" : "Client secret"}>
+                <Input
+                  name="clientSecret"
+                  type="password"
+                  autoComplete="off"
+                  placeholder={org?.ssoClientSecret ? "•••••••• stored — leave blank to keep" : "client secret"}
+                />
+              </Field>
+            </div>
+            <div className="md:col-span-3">
+              <Button type="submit">{configured ? "Save SSO settings" : "Enable SSO"}</Button>
+            </div>
+          </form>
+
+          {configured ? (
+            <form action={disableSso} className="border-t border-slate-100 pt-3">
+              <Button type="submit" size="sm" variant="ghost">
+                Disable SSO
+              </Button>
+              <span className="ml-2 text-xs text-slate-500">
+                Members keep signing in with email &amp; password.
+              </span>
+            </form>
+          ) : null}
+        </CardBody>
+      </Card>
     </div>
   );
 }

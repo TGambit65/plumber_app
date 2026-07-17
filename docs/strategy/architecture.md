@@ -149,5 +149,40 @@ conversion completes:
     (certValidityDays), certification registry (user/equipment/org holders),
     expiring-soon panel + renewal sweep notifications. All seven new tables
     under FORCE RLS; isolation verified across both seeded orgs.
-- **Phase 4:** offline-first implementation + approval-gated egress + AA
-  field-ops pack + SSO federation.
+- **Phase 4 (done):** offline-first field capture + approval-gated egress +
+  AA field-ops pack + SSO federation:
+  - **Offline sync**: `/api/sync/{initial,delta,push}` org-scoped route handlers
+    (server-wins conflicts, soft-delete tombstones, role-scoped snapshots) +
+    `src/lib/offline/*` (dependency-free IndexedDB store, durable outbox queue,
+    local-ID generation + remap incl. FK rewrites, delta merge) + `/field`
+    offline workspace with a live sync-state chip. `updated_at` touch triggers
+    (`db/sync.sql`) drive delta. Verified: local-ID create round-trips to a
+    server ID with FK + org preserved, zero `local:` leakage, stale updates
+    rejected as conflicts (no clobber). TODOs: photo binary upload, service
+    worker precache, at-rest encryption, per-field merge UI (spec §§ noted).
+  - **Approval-gated egress**: `outbound_messages` queue; estimate sends and
+    follow-up touches now create PENDING_APPROVAL rows instead of firing;
+    `/approvals` card UI (office/admin) approves (executes the real send +
+    starts the follow-up cadence) or rejects (notifies requester); licensed
+    sign-offs approvable only by ADMIN or a holder of a valid matching
+    certification (server-enforced). All audited.
+  - **AA field-ops pack**: trade-pack `config.jobTypes` compose the booking
+    job-type picker from the org's ENABLED packs only (`src/lib/trade-packs.ts`);
+    seeded `American Automators` org (Acorn install line, Mascott customer,
+    on-prem-server equipment, install checklist) sees ONLY field-ops job types —
+    zero plumbing/insurance leakage. Dispatch header shows enabled-pack chips.
+  - **SSO federation**: per-org OIDC config in Settings → Identity
+    (`ssoProvider/ssoIssuerUrl/ssoClientId/ssoClientSecret` on organizations);
+    `/auth/sso/[org]` builds the authorize redirect, `/auth/sso/callback`
+    exchanges + resolves the user within the org and creates the session; login
+    page has an SSO workspace-slug path. **Local auth stays the default.**
+    Verified: config persists and the per-org entry builds a correct OIDC
+    authorize URL to the tenant IdP.
+
+## Status: Phases 0–4 complete
+
+The Trade-Ops core now satisfies all 12 ratified constraints. Three seeded
+tenants (Apex Plumbing, Summit HVAC, American Automators) demonstrate
+composition + isolation. Next work is depth per pillar (real IdP wiring,
+supplier punchout, more native connectors, photo pipeline, PWA service worker)
+and additional trade packs (fuel equipment from the Kevin's-App harvest).

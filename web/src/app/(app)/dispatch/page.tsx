@@ -4,6 +4,7 @@ import { and, asc, eq, gte, isNull, lt, notInArray, or } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { assignJob, bookJob } from "@/lib/actions/office";
+import { enabledJobTypes, enabledPacks } from "@/lib/trade-packs";
 import {
   Avatar,
   Badge,
@@ -101,6 +102,14 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
       ])
   );
 
+  // Pack composition: job types + enabled-pack chips come from the org's ENABLED
+  // trade packs only (constraints 1 & 12). Apex → plumbing+sewer, Summit →
+  // hvac+plumbing, American Automators → aa_field_ops ONLY (no plumbing leakage).
+  const [jobTypes, packs] = await Promise.all([
+    enabledJobTypes(session.organizationId),
+    enabledPacks(session.organizationId),
+  ]);
+
   const statusCounts = dayJobs.reduce<Record<string, number>>((acc, j) => {
     acc[j.status] = (acc[j.status] ?? 0) + 1;
     return acc;
@@ -127,6 +136,20 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
           </div>
         }
       />
+
+      {/* Enabled trade packs — the org's composed capability surface */}
+      <div className="mb-4 flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 text-xs font-medium uppercase tracking-wide text-slate-500">Trade packs</span>
+        {packs.length === 0 ? (
+          <span className="text-xs text-slate-400">None enabled</span>
+        ) : (
+          packs.map((p) => (
+            <span key={p.id} title={p.description ?? undefined}>
+              <Badge tone="cyan">{p.name}</Badge>
+            </span>
+          ))
+        )}
+      </div>
 
       {/* Stat row */}
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -267,7 +290,26 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
                 </Select>
               </Field>
               <Field label="Job type">
-                <Input name="jobType" required placeholder="e.g. Water Heater Replacement" />
+                {jobTypes.length > 0 ? (
+                  <Select name="jobType" defaultValue="">
+                    <option value="" disabled>
+                      Select job type…
+                    </option>
+                    {jobTypes.map((jt) => (
+                      <option key={jt} value={jt}>
+                        {jt}
+                      </option>
+                    ))}
+                    <option value="__OTHER__">Other… (type below)</option>
+                  </Select>
+                ) : (
+                  <input type="hidden" name="jobType" value="__OTHER__" />
+                )}
+                <Input
+                  name="jobTypeOther"
+                  className="mt-1.5"
+                  placeholder={jobTypes.length > 0 ? "Or a custom type (overrides the list)" : "e.g. Site Survey"}
+                />
               </Field>
               <Field label="Priority">
                 <Select name="priority" defaultValue="NORMAL">
