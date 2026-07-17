@@ -10,7 +10,8 @@
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
     "db:seed": "tsx --env-file=.env src/db/seed.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:rls": "psql $DATABASE_URL -f src/db/rls.sql"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

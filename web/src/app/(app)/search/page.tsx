@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { db, t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { desc, ilike, or, sql } from "drizzle-orm";
 import { Badge, Button, Card, CardBody, CardHeader, EmptyState, Input, PageHeader } from "@/components/ui";
@@ -44,7 +44,7 @@ function Section({ title, icon, rows }: { title: string; icon: string; rows: Res
 }
 
 export default async function SearchPage({ searchParams }: { searchParams: { q?: string } }) {
-  await requireSession();
+  const session = await requireSession();
   const q = (searchParams.q ?? "").trim();
 
   if (!q) {
@@ -101,17 +101,20 @@ export default async function SearchPage({ searchParams }: { searchParams: { q?:
       .from(t.priceBookItems)
       .where(or(ilike(t.priceBookItems.code, like), ilike(t.priceBookItems.name, like)))
       .limit(FETCH_LIMIT),
-    db
-      .select()
-      .from(t.kbArticles)
-      .where(
-        or(
-          ilike(t.kbArticles.title, like),
-          ilike(t.kbArticles.body, like),
-          sql`array_to_string(${t.kbArticles.tags}, ' ') ilike ${like}`
+    // kb_articles is RLS-enabled → must run inside the tenant transaction.
+    withTenant(session.organizationId, (tx) =>
+      tx
+        .select()
+        .from(t.kbArticles)
+        .where(
+          or(
+            ilike(t.kbArticles.title, like),
+            ilike(t.kbArticles.body, like),
+            sql`array_to_string(${t.kbArticles.tags}, ' ') ilike ${like}`
+          )
         )
-      )
-      .limit(FETCH_LIMIT),
+        .limit(FETCH_LIMIT)
+    ),
     db
       .select()
       .from(t.leads)

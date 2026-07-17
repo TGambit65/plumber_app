@@ -30,12 +30,26 @@ npm run dev            # http://localhost:3000
 
 ### Demo accounts (password `demo1234`)
 
-| Email | Role | Lands on |
+Two tenants are seeded to demonstrate isolation (see Multi-tenancy below):
+
+| Email | Org | Role |
 |---|---|---|
-| `owner@apexplumbing.demo` | Admin / Owner | `/dashboard` |
-| `office@apexplumbing.demo` | Office / Dispatch | `/dispatch` |
-| `sales@apexplumbing.demo` | Sales / Project Manager | `/cockpit` |
-| `tech@apexplumbing.demo` | Field Technician | `/my-day` (mobile-first) |
+| `owner@apexplumbing.demo` | Apex Plumbing | Admin / Owner |
+| `office@apexplumbing.demo` | Apex Plumbing | Office / Dispatch |
+| `sales@apexplumbing.demo` | Apex Plumbing | Sales / Project Manager |
+| `tech@apexplumbing.demo` | Apex Plumbing | Field Technician |
+| `owner@summithvac.demo` | Summit HVAC | Admin / Owner |
+| `tech@summithvac.demo` | Summit HVAC | Field Technician |
+
+### Multi-tenancy (Trade-Ops core)
+
+This app is the multi-tenant **Trade-Ops** core (see
+[`../docs/strategy/architecture.md`](../docs/strategy/architecture.md)). Every
+tenant-owned row carries `organization_id`; isolation is enforced by Postgres
+**RLS** via the `withTenant(orgId, …)` primitive. RLS is enabled table-by-table
+as each module is converted — currently ON for `kb_articles` (verified: Summit
+cannot see Apex's SOPs, and vice-versa). Run `npm run db:rls` to (re)apply
+policies after `npm run db:seed`.
 
 ## What's implemented
 

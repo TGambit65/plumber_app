@@ -16,14 +16,16 @@ export type Session = {
   name: string;
   email: string;
   role: Role;
+  organizationId: string;
 };
 
-export async function createSession(user: { id: string; name: string; email: string; role: Role }) {
+export async function createSession(user: { id: string; name: string; email: string; role: Role; organizationId: string }) {
   const token = await new SignJWT({
     userId: user.id,
     name: user.name,
     email: user.email,
     role: user.role,
+    organizationId: user.organizationId,
   })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
@@ -53,6 +55,7 @@ export const getSession = cache(async (): Promise<Session | null> => {
       name: payload.name as string,
       email: payload.email as string,
       role: payload.role as Role,
+      organizationId: payload.organizationId as string,
     };
   } catch {
     return null;

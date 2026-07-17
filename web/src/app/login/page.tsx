@@ -1,15 +1,16 @@
 import { redirect } from "next/navigation";
 import { getSession, createSession, verifyCredentials } from "@/lib/auth";
-import { ROLE_HOME, ROLE_LABELS } from "@/lib/permissions";
+import { ROLE_HOME } from "@/lib/permissions";
 import type { Role } from "@/lib/auth";
 
 export const metadata = { title: "Sign in" };
 
-const DEMO_ACCOUNTS: { email: string; role: Role }[] = [
-  { email: "owner@apexplumbing.demo", role: "ADMIN" },
-  { email: "office@apexplumbing.demo", role: "OFFICE" },
-  { email: "sales@apexplumbing.demo", role: "SALES_PM" },
-  { email: "tech@apexplumbing.demo", role: "TECH" },
+const DEMO_ACCOUNTS: { email: string; role: Role; org: string }[] = [
+  { email: "owner@apexplumbing.demo", role: "ADMIN", org: "Apex Plumbing" },
+  { email: "sales@apexplumbing.demo", role: "SALES_PM", org: "Apex Plumbing" },
+  { email: "tech@apexplumbing.demo", role: "TECH", org: "Apex Plumbing" },
+  { email: "owner@summithvac.demo", role: "ADMIN", org: "Summit HVAC" },
+  { email: "tech@summithvac.demo", role: "TECH", org: "Summit HVAC" },
 ];
 
 async function login(formData: FormData) {
@@ -18,7 +19,7 @@ async function login(formData: FormData) {
   const password = String(formData.get("password") ?? "");
   const user = await verifyCredentials(email, password);
   if (!user) redirect("/login?error=1");
-  await createSession({ id: user.id, name: user.name, email: user.email, role: user.role });
+  await createSession({ id: user.id, name: user.name, email: user.email, role: user.role, organizationId: user.organizationId });
   redirect(ROLE_HOME[user.role]);
 }
 
@@ -84,9 +85,9 @@ export default async function LoginPage({ searchParams }: { searchParams: { erro
             </p>
             <ul className="space-y-1 text-xs text-slate-600">
               {DEMO_ACCOUNTS.map((a) => (
-                <li key={a.email} className="flex items-center justify-between rounded-md bg-slate-50 px-2.5 py-1.5">
-                  <code>{a.email}</code>
-                  <span className="text-slate-400">{ROLE_LABELS[a.role]}</span>
+                <li key={a.email} className="flex items-center justify-between gap-2 rounded-md bg-slate-50 px-2.5 py-1.5">
+                  <code className="truncate">{a.email}</code>
+                  <span className="shrink-0 text-slate-400">{a.org}</span>
                 </li>
               ))}
             </ul>

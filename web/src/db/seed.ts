@@ -1,8 +1,17 @@
-/* Seed realistic demo data. Run: npm run db:seed */
-import { db, t } from "./index";
+/* Seed realistic demo data. Run: npm run db:seed
+ *
+ * Multi-tenant: seeds TWO organizations (Apex Plumbing, Summit HVAC) to prove
+ * isolation. All Apex data is inserted with the RLS GUC (app.current_org) set
+ * to Apex's id on a DEDICATED connection, so the organization_id column default
+ * (current_setting('app.current_org')) populates every row automatically.
+ */
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Client } from "pg";
+import * as schema from "./schema";
 import bcrypt from "bcryptjs";
 import { sql } from "drizzle-orm";
 
+const t = schema;
 const $ = (dollars: number) => Math.round(dollars * 100);
 const daysFromNow = (d: number, h = 9, m = 0) => {
   const dt = new Date();
@@ -12,12 +21,24 @@ const daysFromNow = (d: number, h = 9, m = 0) => {
 };
 const period = () => new Date().toISOString().slice(0, 7);
 
+// Dedicated single connection so `SET app.current_org` persists across inserts.
+const client = new Client({ connectionString: process.env.DATABASE_URL });
+const db = drizzle(client, { schema });
+
+async function setOrg(orgId: string) {
+  // session-level SET on this dedicated connection → org_id default resolves.
+  await db.execute(sql.raw(`SET app.current_org = '${orgId}'`));
+}
+
 async function main() {
+  await client.connect();
+
   console.log("Clearing existing data…");
-  // Order matters (FKs). Truncate everything in one statement.
   await db.execute(sql`
     TRUNCATE TABLE
-      audit_logs, notifications, activities, integration_connections,
+      organization_trade_packs, trade_packs,
+      audit_logs, notifications, messages, conversation_participants, conversations,
+      user_permission_overrides, integration_connections,
       kb_articles, commission_entries, commission_rules,
       purchase_order_lines, purchase_orders, part_requests, material_usages,
       stock_levels, inventory_locations, price_book_items,
@@ -25,9 +46,43 @@ async function main() {
       subcontractors, cost_entries, permits, change_orders, milestones,
       time_entries, job_forms, job_photos,
       estimate_line_items, estimate_options, follow_ups, estimates,
-      jobs, projects, leads, memberships, equipment, properties, customers, users
-    CASCADE
+      jobs, projects, leads, memberships, equipment, properties, customers, users,
+      activities, organizations
+    RESTART IDENTITY CASCADE
   `);
+
+  console.log("Organizations & trade packs…");
+  const [apex, summit] = await db
+    .insert(t.organizations)
+    .values([
+      { name: "Apex Plumbing", slug: "apex-plumbing", brandPrimary: "#0057FF" },
+      { name: "Summit HVAC", slug: "summit-hvac", brandPrimary: "#0057FF" },
+    ])
+    .returning();
+
+  const packs = await db
+    .insert(t.tradePacks)
+    .values([
+      { key: "plumbing", name: "Plumbing", description: "Reference trade pack: water heaters, drains, repipe, fixtures." },
+      { key: "hvac", name: "HVAC", description: "Heating, ventilation & air conditioning." },
+      { key: "sewer", name: "Septic / Sewer", description: "Camera inspection, jetting, line repair." },
+      { key: "electrical", name: "Electrical", description: "Panels, permits, service upgrades." },
+      { key: "restoration", name: "Restoration", description: "Water/fire/mold — insurance-heavy." },
+      { key: "roofing", name: "Roofing", description: "Insurance-heavy; claim-linked documentation." },
+      { key: "fuel_equipment", name: "Fuel Equipment", description: "UST/dispenser/cardlock — design partner Mascott." },
+      { key: "aa_field_ops", name: "AA Field-Ops", description: "American Automators dogfood: Acorn tiers + on-prem installs." },
+    ])
+    .returning();
+  const packByKey = Object.fromEntries(packs.map((p) => [p.key, p]));
+  await db.insert(t.organizationTradePacks).values([
+    { organizationId: apex.id, tradePackId: packByKey["plumbing"].id },
+    { organizationId: apex.id, tradePackId: packByKey["sewer"].id },
+    { organizationId: summit.id, tradePackId: packByKey["hvac"].id },
+    { organizationId: summit.id, tradePackId: packByKey["plumbing"].id },
+  ]);
+
+  // ── Everything below is Apex's tenant data (org_id auto-fills from GUC) ──
+  await setOrg(apex.id);
 
   console.log("Users…");
   const hash = await bcrypt.hash("demo1234", 10);
@@ -542,16 +597,51 @@ async function main() {
     { userId: office.id, action: "REFUND_REQUEST", entity: "Invoice", entityId: invOverdue.id, detail: { status: "denied", reason: "No basis" } },
   ]);
 
-  console.log("✅ Seed complete.");
-  console.log("Demo accounts (password: demo1234):");
-  console.log("  owner@apexplumbing.demo  (Admin/Owner)");
-  console.log("  office@apexplumbing.demo (Office/Dispatch)");
-  console.log("  sales@apexplumbing.demo  (Sales/PM)");
-  console.log("  tech@apexplumbing.demo   (Field Tech)");
+  // ── Org B: Summit HVAC (compact dataset — proves tenant isolation) ──────────
+  await setOrg(summit.id);
+  console.log("Summit HVAC (org B)…");
+  const [sAdmin, sTech] = await db
+    .insert(t.users)
+    .values([
+      { email: "owner@summithvac.demo", name: "Grace Okafor", role: "ADMIN", passwordHash: hash, phone: "555-0200" },
+      { email: "tech@summithvac.demo", name: "Ben Carter", role: "TECH", passwordHash: hash, phone: "555-0201" },
+    ])
+    .returning();
+  const [sCust] = await db
+    .insert(t.customers)
+    .values([{ name: "Northside Offices LLC", type: "COMMERCIAL", company: "Northside Offices LLC", email: "facilities@northside.demo", phone: "555-0300" }])
+    .returning();
+  const [sProp] = await db
+    .insert(t.properties)
+    .values([{ customerId: sCust.id, address: "80 Commerce Way", city: "Aurora", state: "CO", zip: "80012", accessNotes: "Rooftop units — badge in at security" }])
+    .returning();
+  await db.insert(t.jobs).values([
+    { number: "S-2001", status: "SCHEDULED", priority: "NORMAL", jobType: "RTU Maintenance", customerId: sCust.id, propertyId: sProp.id, assignedToId: sTech.id, scheduledAt: daysFromNow(0, 9), description: "Quarterly rooftop unit PM — 4 units." },
+  ]);
+  await db.insert(t.priceBookItems).values([
+    { code: "HVAC-TUNEUP", name: "AC Tune-Up", category: "HVAC", unitCostCents: $(20), unitPriceCents: $(149), laborHours: 1 },
+    { code: "HVAC-CAP", name: "Capacitor Replacement", category: "HVAC", unitCostCents: $(18), unitPriceCents: $(180), laborHours: 0.5 },
+  ]);
+  await db.insert(t.kbArticles).values([
+    { slug: "rtu-pm-sop", title: "SOP: Rooftop Unit Preventive Maintenance", category: "SOP", tags: ["hvac", "rtu"], authorId: sAdmin.id, verifiedAt: daysFromNow(-15), body: "## Quarterly RTU PM\n1. Lockout/tagout\n2. Inspect belts, check amp draw\n3. Coil clean, condensate check\n4. Filter change\n5. Log refrigerant pressures" },
+    { slug: "summit-warranty", title: "POLICY: Summit HVAC Labor Warranty", category: "POLICY", tags: ["warranty"], authorId: sAdmin.id, body: "Installs: 2 years labor. Repairs: 90 days. Maintenance plans: priority scheduling." },
+  ]);
+  await db.insert(t.integrationConnections).values([
+    { provider: "QUICKBOOKS", status: "CONNECTED", lastSyncAt: daysFromNow(0, 6) },
+    { provider: "ORGMEMORY", status: "DISCONNECTED" },
+  ]);
+
+  console.log("✅ Seed complete (2 orgs).");
+  console.log("Apex Plumbing (org A) — password demo1234:");
+  console.log("  owner@apexplumbing.demo · office@ · sales@ · tech@");
+  console.log("Summit HVAC (org B) — password demo1234:");
+  console.log("  owner@summithvac.demo · tech@summithvac.demo");
+  await client.end();
   process.exit(0);
 }
 
-main().catch((e) => {
+main().catch(async (e) => {
   console.error(e);
+  try { await client.end(); } catch {}
   process.exit(1);
 });

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { and, desc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
@@ -89,7 +89,7 @@ export default async function KbPage({
   const q = (searchParams.q ?? "").trim();
   const cat = CATEGORIES.some((c) => c.key === searchParams.cat) ? (searchParams.cat as CatKey) : undefined;
   const isAuthor = can(session.role, "kb.author");
-  const store = await getKnowledgeStore();
+  const store = await getKnowledgeStore(session.organizationId);
   const storeHealth = await store.health();
 
   const conds: SQL[] = [];
@@ -105,11 +105,13 @@ export default async function KbPage({
   }
   if (cat) conds.push(eq(t.kbArticles.category, cat));
 
-  const articles = (await db.query.kbArticles.findMany({
-    where: conds.length ? and(...conds) : undefined,
-    with: { author: true },
-    orderBy: [desc(t.kbArticles.updatedAt)],
-  })) as Article[];
+  const articles = (await withTenant(session.organizationId, (tx) =>
+    tx.query.kbArticles.findMany({
+      where: conds.length ? and(...conds) : undefined,
+      with: { author: true },
+      orderBy: [desc(t.kbArticles.updatedAt)],
+    })
+  )) as Article[];
 
   const grouped = !q; // group by category when not searching
 

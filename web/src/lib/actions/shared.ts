@@ -1,6 +1,6 @@
 "use server";
 
-import { db, t } from "@/db";
+import { db, t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { audit, logActivity, notify } from "@/lib/actions/helpers";
@@ -45,24 +45,28 @@ export async function createKbArticle(formData: FormData) {
   if (!title || !body) return;
 
   let slug = slugify(title) || "article";
-  const existing = await db.select({ slug: t.kbArticles.slug }).from(t.kbArticles);
-  const taken = new Set(existing.map((r) => r.slug));
-  if (taken.has(slug)) {
-    let i = 2;
-    while (taken.has(`${slug}-${i}`)) i++;
-    slug = `${slug}-${i}`;
-  }
-
-  const [article] = await db
-    .insert(t.kbArticles)
-    .values({ slug, title, category, body, tags, authorId: session.userId })
-    .returning();
+  // Org-scoped: uniqueness + insert run inside the tenant transaction so RLS
+  // filters and the organization_id column default populates from the GUC.
+  const article = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.select({ slug: t.kbArticles.slug }).from(t.kbArticles);
+    const taken = new Set(existing.map((r) => r.slug));
+    if (taken.has(slug)) {
+      let i = 2;
+      while (taken.has(`${slug}-${i}`)) i++;
+      slug = `${slug}-${i}`;
+    }
+    const [row] = await tx
+      .insert(t.kbArticles)
+      .values({ slug, title, category, body, tags, authorId: session.userId })
+      .returning();
+    return row;
+  });
   await audit(session.userId, "CREATE", "KbArticle", article.id, { title, category });
 
   // Stage into the company knowledge substrate (OrgMemory) when connected.
   // Constraint 6: this is a STAGED CANDIDATE — a human reviewer promotes to canon.
   const { getKnowledgeStore } = await import("@/lib/knowledge/store");
-  const store = await getKnowledgeStore();
+  const store = await getKnowledgeStore(session.organizationId);
   const result = await store.stageDocument({ id: article.id, slug, title, category, body, tags });
   if (result.degraded) {
     // Loud, visible failure — never silently pretend the mirror worked.
@@ -104,7 +108,9 @@ export async function markKbVerified(formData: FormData) {
   if (session.role !== "ADMIN") throw new Error("Not allowed");
   const id = str(formData.get("id"));
   const slug = str(formData.get("slug"));
-  await db.update(t.kbArticles).set({ verifiedAt: new Date() }).where(eq(t.kbArticles.id, id));
+  await withTenant(session.organizationId, (tx) =>
+    tx.update(t.kbArticles).set({ verifiedAt: new Date() }).where(eq(t.kbArticles.id, id))
+  );
   await audit(session.userId, "VERIFY", "KbArticle", id);
   revalidatePath(`/kb/${slug}`);
   revalidatePath("/kb");

@@ -77,6 +77,7 @@ export const integrationStatusEnum = pgEnum("integration_status", [
 // ── Users ────────────────────────────────────────────────────────────────────
 export const users = pgTable("users", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   email: text("email").notNull().unique(),
   name: text("name").notNull(),
   phone: text("phone"),
@@ -89,6 +90,7 @@ export const users = pgTable("users", {
 // ── Customers, properties, equipment ────────────────────────────────────────
 export const customers = pgTable("customers", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   type: customerTypeEnum("type").notNull().default("RESIDENTIAL"),
   name: text("name").notNull(),
   company: text("company"),
@@ -100,6 +102,7 @@ export const customers = pgTable("customers", {
 
 export const properties = pgTable("properties", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   customerId: text("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
   label: text("label"),
   address: text("address").notNull(),
@@ -115,6 +118,7 @@ export const properties = pgTable("properties", {
 
 export const equipment = pgTable("equipment", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   propertyId: text("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
   kind: text("kind").notNull(),
   brand: text("brand"),
@@ -126,6 +130,7 @@ export const equipment = pgTable("equipment", {
 
 export const memberships = pgTable("memberships", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   customerId: text("customer_id").notNull().unique().references(() => customers.id, { onDelete: "cascade" }),
   plan: text("plan").notNull(),
   status: text("status").notNull().default("ACTIVE"),
@@ -135,6 +140,7 @@ export const memberships = pgTable("memberships", {
 // ── Leads & follow-ups ───────────────────────────────────────────────────────
 export const leads = pgTable("leads", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   source: leadSourceEnum("source").notNull().default("PHONE"),
   stage: leadStageEnum("stage").notNull().default("NEW"),
   title: text("title").notNull(),
@@ -158,6 +164,7 @@ export const leads = pgTable("leads", {
 
 export const followUps = pgTable("follow_ups", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   leadId: text("lead_id").references(() => leads.id, { onDelete: "cascade" }),
   estimateId: text("estimate_id").references(() => estimates.id, { onDelete: "cascade" }),
   channel: followUpChannelEnum("channel").notNull(),
@@ -170,6 +177,7 @@ export const followUps = pgTable("follow_ups", {
 // ── Estimates ────────────────────────────────────────────────────────────────
 export const estimates = pgTable("estimates", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   number: text("number").notNull().unique(),
   status: estimateStatusEnum("status").notNull().default("DRAFT"),
   customerId: text("customer_id").notNull().references(() => customers.id),
@@ -189,6 +197,7 @@ export const estimates = pgTable("estimates", {
 
 export const estimateOptions = pgTable("estimate_options", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   estimateId: text("estimate_id").notNull().references(() => estimates.id, { onDelete: "cascade" }),
   tier: optionTierEnum("tier").notNull(),
   name: text("name").notNull(),
@@ -199,6 +208,7 @@ export const estimateOptions = pgTable("estimate_options", {
 
 export const estimateLineItems = pgTable("estimate_line_items", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   optionId: text("option_id").notNull().references(() => estimateOptions.id, { onDelete: "cascade" }),
   priceBookItemId: text("price_book_item_id").references(() => priceBookItems.id),
   description: text("description").notNull(),
@@ -211,6 +221,7 @@ export const estimateLineItems = pgTable("estimate_line_items", {
 // ── Jobs ─────────────────────────────────────────────────────────────────────
 export const jobs = pgTable("jobs", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   number: text("number").notNull().unique(),
   status: jobStatusEnum("status").notNull().default("UNSCHEDULED"),
   priority: jobPriorityEnum("priority").notNull().default("NORMAL"),
@@ -229,6 +240,7 @@ export const jobs = pgTable("jobs", {
 
 export const jobPhotos = pgTable("job_photos", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   jobId: text("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
   kind: photoKindEnum("kind").notNull(),
   url: text("url").notNull(),
@@ -239,6 +251,7 @@ export const jobPhotos = pgTable("job_photos", {
 
 export const jobForms = pgTable("job_forms", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   jobId: text("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   required: boolean("required").notNull().default(false),
@@ -248,6 +261,7 @@ export const jobForms = pgTable("job_forms", {
 
 export const timeEntries = pgTable("time_entries", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   userId: text("user_id").notNull().references(() => users.id),
   jobId: text("job_id").references(() => jobs.id),
   kind: timeEntryKindEnum("kind").notNull().default("WORK"),
@@ -258,6 +272,7 @@ export const timeEntries = pgTable("time_entries", {
 // ── Projects ─────────────────────────────────────────────────────────────────
 export const projects = pgTable("projects", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   name: text("name").notNull(),
   status: projectStatusEnum("status").notNull().default("PLANNING"),
   customerId: text("customer_id").notNull().references(() => customers.id),
@@ -272,6 +287,7 @@ export const projects = pgTable("projects", {
 
 export const milestones = pgTable("milestones", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   status: milestoneStatusEnum("status").notNull().default("PENDING"),
@@ -284,6 +300,7 @@ export const milestones = pgTable("milestones", {
 
 export const changeOrders = pgTable("change_orders", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   number: text("number").notNull(),
   description: text("description").notNull(),
@@ -296,6 +313,7 @@ export const changeOrders = pgTable("change_orders", {
 
 export const permits = pgTable("permits", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   jurisdiction: text("jurisdiction").notNull(),
   permitNumber: text("permit_number"),
@@ -307,6 +325,7 @@ export const permits = pgTable("permits", {
 
 export const costEntries = pgTable("cost_entries", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   kind: costKindEnum("kind").notNull(),
   description: text("description").notNull(),
@@ -316,6 +335,7 @@ export const costEntries = pgTable("cost_entries", {
 
 export const subcontractors = pgTable("subcontractors", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   trade: text("trade").notNull(),
@@ -327,6 +347,7 @@ export const subcontractors = pgTable("subcontractors", {
 // ── Invoices & payments ──────────────────────────────────────────────────────
 export const invoices = pgTable("invoices", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   number: text("number").notNull().unique(),
   status: invoiceStatusEnum("status").notNull().default("DRAFT"),
   customerId: text("customer_id").notNull().references(() => customers.id),
@@ -341,6 +362,7 @@ export const invoices = pgTable("invoices", {
 
 export const invoiceLineItems = pgTable("invoice_line_items", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   invoiceId: text("invoice_id").notNull().references(() => invoices.id, { onDelete: "cascade" }),
   priceBookItemId: text("price_book_item_id").references(() => priceBookItems.id),
   description: text("description").notNull(),
@@ -350,6 +372,7 @@ export const invoiceLineItems = pgTable("invoice_line_items", {
 
 export const payments = pgTable("payments", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   invoiceId: text("invoice_id").notNull().references(() => invoices.id, { onDelete: "cascade" }),
   amountCents: integer("amount_cents").notNull(),
   method: paymentMethodEnum("method").notNull(),
@@ -360,6 +383,7 @@ export const payments = pgTable("payments", {
 // ── Price book & inventory ───────────────────────────────────────────────────
 export const priceBookItems = pgTable("price_book_items", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   code: text("code").notNull().unique(),
   name: text("name").notNull(),
   description: text("description"),
@@ -372,6 +396,7 @@ export const priceBookItems = pgTable("price_book_items", {
 
 export const inventoryLocations = pgTable("inventory_locations", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   name: text("name").notNull(),
   kind: locationKindEnum("kind").notNull(),
   userId: text("user_id").unique().references(() => users.id),
@@ -381,6 +406,7 @@ export const stockLevels = pgTable(
   "stock_levels",
   {
     id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
     locationId: text("location_id").notNull().references(() => inventoryLocations.id, { onDelete: "cascade" }),
     priceBookItemId: text("price_book_item_id").notNull().references(() => priceBookItems.id, { onDelete: "cascade" }),
     qtyOnHand: doublePrecision("qty_on_hand").notNull().default(0),
@@ -395,6 +421,7 @@ export const stockLevels = pgTable(
 
 export const materialUsages = pgTable("material_usages", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   jobId: text("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
   priceBookItemId: text("price_book_item_id").notNull().references(() => priceBookItems.id),
   qty: doublePrecision("qty").notNull(),
@@ -403,6 +430,7 @@ export const materialUsages = pgTable("material_usages", {
 
 export const partRequests = pgTable("part_requests", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   requestedById: text("requested_by_id").notNull().references(() => users.id),
   jobId: text("job_id").references(() => jobs.id),
   priceBookItemId: text("price_book_item_id").references(() => priceBookItems.id),
@@ -414,6 +442,7 @@ export const partRequests = pgTable("part_requests", {
 
 export const purchaseOrders = pgTable("purchase_orders", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   number: text("number").notNull().unique(),
   supplier: text("supplier").notNull(),
   status: poStatusEnum("status").notNull().default("DRAFT"),
@@ -423,6 +452,7 @@ export const purchaseOrders = pgTable("purchase_orders", {
 
 export const purchaseOrderLines = pgTable("purchase_order_lines", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   purchaseOrderId: text("purchase_order_id").notNull().references(() => purchaseOrders.id, { onDelete: "cascade" }),
   priceBookItemId: text("price_book_item_id").notNull().references(() => priceBookItems.id),
   qty: doublePrecision("qty").notNull(),
@@ -433,6 +463,7 @@ export const purchaseOrderLines = pgTable("purchase_order_lines", {
 // ── Commissions ──────────────────────────────────────────────────────────────
 export const commissionRules = pgTable("commission_rules", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   name: text("name").notNull(),
   kind: commissionKindEnum("kind").notNull(),
   rate: doublePrecision("rate").notNull(), // percent for PERCENT_*, cents for SPIFF
@@ -443,6 +474,7 @@ export const commissionRules = pgTable("commission_rules", {
 
 export const commissionEntries = pgTable("commission_entries", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   userId: text("user_id").notNull().references(() => users.id),
   description: text("description").notNull(),
   amountCents: integer("amount_cents").notNull(),
@@ -454,22 +486,30 @@ export const commissionEntries = pgTable("commission_entries", {
 });
 
 // ── Knowledge base ───────────────────────────────────────────────────────────
-export const kbArticles = pgTable("kb_articles", {
-  id: id(),
-  slug: text("slug").notNull().unique(),
-  title: text("title").notNull(),
-  category: kbCategoryEnum("category").notNull(),
-  body: text("body").notNull(),
-  tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
-  authorId: text("author_id").notNull().references(() => users.id),
-  verifiedAt: timestamp("verified_at", { withTimezone: true }),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const kbArticles = pgTable(
+  "kb_articles",
+  {
+    id: id(),
+    organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
+    slug: text("slug").notNull(),
+    title: text("title").notNull(),
+    category: kbCategoryEnum("category").notNull(),
+    body: text("body").notNull(),
+    tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
+    authorId: text("author_id").notNull().references(() => users.id),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (tb) => ({
+    orgSlug: uniqueIndex("kb_articles_org_slug_idx").on(tb.organizationId, tb.slug),
+  })
+);
 
 // ── Timeline, notifications, audit, integrations ────────────────────────────
 export const activities = pgTable("activities", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   kind: activityKindEnum("kind").notNull(),
   body: text("body").notNull(),
   userId: text("user_id").references(() => users.id),
@@ -482,6 +522,7 @@ export const activities = pgTable("activities", {
 
 export const notifications = pgTable("notifications", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   body: text("body"),
@@ -492,6 +533,7 @@ export const notifications = pgTable("notifications", {
 
 export const auditLogs = pgTable("audit_logs", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   userId: text("user_id").references(() => users.id),
   action: text("action").notNull(),
   entity: text("entity").notNull(),
@@ -500,13 +542,20 @@ export const auditLogs = pgTable("audit_logs", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const integrationConnections = pgTable("integration_connections", {
-  id: id(),
-  provider: text("provider").notNull().unique(),
-  status: integrationStatusEnum("status").notNull().default("DISCONNECTED"),
-  config: jsonb("config"),
-  lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
-});
+export const integrationConnections = pgTable(
+  "integration_connections",
+  {
+    id: id(),
+    organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
+    provider: text("provider").notNull(),
+    status: integrationStatusEnum("status").notNull().default("DISCONNECTED"),
+    config: jsonb("config"),
+    lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
+  },
+  (tb) => ({
+    orgProvider: uniqueIndex("integration_connections_org_provider_idx").on(tb.organizationId, tb.provider),
+  })
+);
 
 // ── Relations (query-layer joins) ────────────────────────────────────────────
 export const usersRelations = relations(users, ({ many, one }) => ({
@@ -706,6 +755,7 @@ export const userPermissionOverrides = pgTable(
   "user_permission_overrides",
   {
     id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     permission: text("permission").notNull(),
     granted: boolean("granted").notNull(), // true = add, false = revoke
@@ -723,6 +773,7 @@ export const userPermissionOverridesRelations = relations(userPermissionOverride
 // ── In-app messaging ─────────────────────────────────────────────────────────
 export const conversations = pgTable("conversations", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   title: text("title"), // null for 1:1 (derived from participants); set for groups
   isGroup: boolean("is_group").notNull().default(false),
   createdById: text("created_by_id").references(() => users.id),
@@ -734,6 +785,7 @@ export const conversationParticipants = pgTable(
   "conversation_participants",
   {
     id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
     conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     lastReadAt: timestamp("last_read_at", { withTimezone: true }),
@@ -745,6 +797,7 @@ export const conversationParticipants = pgTable(
 
 export const messages = pgTable("messages", {
   id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
   conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
   senderId: text("sender_id").notNull().references(() => users.id),
   body: text("body").notNull(),
@@ -765,4 +818,60 @@ export const conversationParticipantsRelations = relations(conversationParticipa
 export const messagesRelations = relations(messages, ({ one }) => ({
   conversation: one(conversations, { fields: [messages.conversationId], references: [conversations.id] }),
   sender: one(users, { fields: [messages.senderId], references: [users.id] }),
+}));
+
+// ── Multi-tenancy: organizations & trade packs ───────────────────────────────
+// Every tenant-owned row carries organization_id (RLS-enforced). Organizations
+// are the tenant root; trade packs are composable capability bundles a tenant
+// enables (a tenant may enable MANY — plumbing + sewer, GC + restoration).
+
+export const organizations = pgTable("organizations", {
+  id: id(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  // Standalone-first: local auth by default; external SSO when configured.
+  ssoProvider: text("sso_provider"),
+  brandPrimary: text("brand_primary").default("#0057FF"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Global catalog of available trade packs (not tenant-scoped).
+export const tradePacks = pgTable("trade_packs", {
+  id: id(),
+  key: text("key").notNull().unique(), // e.g. "plumbing", "hvac", "fuel_equipment", "aa_field_ops"
+  name: text("name").notNull(),
+  description: text("description"),
+  // Data/config-driven content: job & estimate templates, line-item catalog,
+  // compliance/credential rules, safety docs, seasonality, equipment models.
+  config: jsonb("config"),
+  active: boolean("active").notNull().default(true),
+});
+
+// Which packs a tenant has enabled (composition point — many per org).
+export const organizationTradePacks = pgTable(
+  "organization_trade_packs",
+  {
+    id: id(),
+    organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    tradePackId: text("trade_pack_id").notNull().references(() => tradePacks.id, { onDelete: "cascade" }),
+    enabledAt: timestamp("enabled_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (tb) => ({
+    orgPack: uniqueIndex("organization_trade_packs_org_pack_idx").on(tb.organizationId, tb.tradePackId),
+  })
+);
+
+export const organizationsRelations = relations(organizations, ({ many }) => ({
+  users: many(users),
+  tradePacks: many(organizationTradePacks),
+}));
+
+export const tradePacksRelations = relations(tradePacks, ({ many }) => ({
+  organizations: many(organizationTradePacks),
+}));
+
+export const organizationTradePacksRelations = relations(organizationTradePacks, ({ one }) => ({
+  organization: one(organizations, { fields: [organizationTradePacks.organizationId], references: [organizations.id] }),
+  tradePack: one(tradePacks, { fields: [organizationTradePacks.tradePackId], references: [tradePacks.id] }),
 }));

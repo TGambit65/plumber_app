@@ -22,6 +22,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const perms = await effectivePermissions(session.userId, session.role);
   const nav = navForUser(session.role, perms);
 
+  const [org] = await db
+    .select({ name: t.organizations.name })
+    .from(t.organizations)
+    .where(eq(t.organizations.id, session.organizationId));
+  const orgName = org?.name ?? "Trade-Ops";
+
   const unread = await db
     .select({ id: t.notifications.id, title: t.notifications.title, body: t.notifications.body, href: t.notifications.href, createdAt: t.notifications.createdAt })
     .from(t.notifications)
@@ -59,7 +65,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <div className="flex h-14 items-center gap-2 border-b border-white/10 px-4">
           <span className="text-xl">🔧</span>
           <div>
-            <div className="text-sm font-bold text-white">Apex Plumbing</div>
+            <div className="text-sm font-bold text-white">{orgName}</div>
             <div className="text-[10px] uppercase tracking-wider text-slate-400">{ROLE_LABELS[session.role]}</div>
           </div>
         </div>
@@ -92,7 +98,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-slate-200 bg-white px-4">
           <Link href="/" className="flex items-center gap-2 md:hidden">
             <span className="text-lg">🔧</span>
-            <span className="text-sm font-bold">Apex</span>
+            <span className="text-sm font-bold">{orgName}</span>
           </Link>
           <div className="ml-auto flex items-center gap-2">
             <GlobalSearch />

@@ -1,6 +1,6 @@
 import "server-only";
-import { db, t } from "@/db";
-import { desc, ilike, or, eq } from "drizzle-orm";
+import { db, t, withTenant } from "@/db";
+import { desc, ilike, or, eq, and } from "drizzle-orm";
 
 export type KbHit = {
   id: string;
@@ -57,13 +57,18 @@ export class LocalKnowledgeStore implements KnowledgeStore {
   readonly name = "local" as const;
   readonly semantic = false;
 
+  // organizationId scopes the local search under RLS.
+  constructor(private organizationId: string) {}
+
   async search(query: string, opts?: { limit?: number; category?: string }): Promise<KbHit[]> {
     const q = query.trim();
-    const rows = await db.query.kbArticles.findMany({
-      where: q ? or(ilike(t.kbArticles.title, `%${q}%`), ilike(t.kbArticles.body, `%${q}%`)) : undefined,
-      orderBy: [desc(t.kbArticles.updatedAt)],
-      limit: opts?.limit ?? 50,
-    });
+    const rows = await withTenant(this.organizationId, (tx) =>
+      tx.query.kbArticles.findMany({
+        where: q ? or(ilike(t.kbArticles.title, `%${q}%`), ilike(t.kbArticles.body, `%${q}%`)) : undefined,
+        orderBy: [desc(t.kbArticles.updatedAt)],
+        limit: opts?.limit ?? 50,
+      })
+    );
     return rows
       .filter((r) => !opts?.category || r.category === opts.category)
       .map((r) => ({
@@ -103,10 +108,12 @@ export type OrgMemoryConfig = {
 export class OrgMemoryStore implements KnowledgeStore {
   readonly name = "orgmemory" as const;
   readonly semantic = true;
-  private local = new LocalKnowledgeStore();
+  private local: LocalKnowledgeStore;
   private lastError?: string;
 
-  constructor(private cfg: OrgMemoryConfig) {}
+  constructor(private cfg: OrgMemoryConfig) {
+    this.local = new LocalKnowledgeStore(cfg.organizationId);
+  }
 
   private identity() {
     return {
@@ -203,23 +210,27 @@ export class OrgMemoryStore implements KnowledgeStore {
  * organizationId is REQUIRED for OrgMemory (tenant identity on every call);
  * without it we stay on the local store.
  */
-export async function getKnowledgeStore(organizationId?: string): Promise<KnowledgeStore> {
+export async function getKnowledgeStore(organizationId: string): Promise<KnowledgeStore> {
   const [conn] = await db
     .select()
     .from(t.integrationConnections)
-    .where(eq(t.integrationConnections.provider, "ORGMEMORY"));
-  const cfg = (conn?.config ?? {}) as Partial<OrgMemoryConfig> & { namespace?: string };
-  const orgId = organizationId ?? cfg.organizationId;
-  if (conn?.status === "CONNECTED" && cfg.gatewayUrl && cfg.token && orgId) {
+    .where(
+      and(
+        eq(t.integrationConnections.provider, "ORGMEMORY"),
+        eq(t.integrationConnections.organizationId, organizationId)
+      )
+    );
+  const cfg = (conn?.config ?? {}) as Partial<OrgMemoryConfig>;
+  if (conn?.status === "CONNECTED" && cfg.gatewayUrl && cfg.token) {
     return new OrgMemoryStore({
       gatewayUrl: cfg.gatewayUrl,
       token: cfg.token,
-      organizationId: orgId,
+      organizationId, // tenant identity on every OrgMemory call
       department: cfg.department,
       classification: cfg.classification,
     });
   }
-  return new LocalKnowledgeStore();
+  return new LocalKnowledgeStore(organizationId);
 }
 
 function snippet(body: string, q: string): string {

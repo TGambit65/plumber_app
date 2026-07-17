@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { and, desc, eq, ne } from "drizzle-orm";
 import { Badge, Button, Card, CardBody, CardHeader } from "@/components/ui";
@@ -36,17 +36,21 @@ export default async function KbArticlePage({
 }) {
   const session = await requireSession();
 
-  const article = await db.query.kbArticles.findFirst({
-    where: eq(t.kbArticles.slug, params.slug),
-    with: { author: true },
-  });
+  const article = await withTenant(session.organizationId, (tx) =>
+    tx.query.kbArticles.findFirst({
+      where: eq(t.kbArticles.slug, params.slug),
+      with: { author: true },
+    })
+  );
   if (!article) notFound();
 
-  const related = await db.query.kbArticles.findMany({
-    where: and(eq(t.kbArticles.category, article.category), ne(t.kbArticles.id, article.id)),
-    orderBy: [desc(t.kbArticles.updatedAt)],
-    limit: 3,
-  });
+  const related = await withTenant(session.organizationId, (tx) =>
+    tx.query.kbArticles.findMany({
+      where: and(eq(t.kbArticles.category, article.category), ne(t.kbArticles.id, article.id)),
+      orderBy: [desc(t.kbArticles.updatedAt)],
+      limit: 3,
+    })
+  );
 
   return (
     <div className="mx-auto max-w-3xl">
