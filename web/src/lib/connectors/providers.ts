@@ -17,9 +17,13 @@ import type {
 } from "./types";
 import { missingRequiredFields } from "./types";
 import { odooConnector } from "./odoo";
+import { hubspotConnector } from "./hubspot";
+import { quickbooksConnector } from "./quickbooks";
+import { cxmlSupplierConnector } from "./cxml-supplier";
 
 /**
- * Connector registry. Odoo is the real implementation (constraint 9 — Odoo CRM
+ * Connector registry. Odoo (JSON-RPC), HubSpot (CRM v3 REST) and QuickBooks
+ * Online (Accounting API v3) are REAL implementations (constraint 9 — Odoo CRM
  * required); the rest are descriptor-complete stubs that return realistic-
  * shaped data marked { demo: true } until real credentials/impls land.
  *
@@ -135,20 +139,8 @@ export const REGISTRY: Record<string, Connector> = {
   // CRM — Odoo is the real implementation.
   ODOO: odooConnector,
 
-  HUBSPOT: makeStub({
-    descriptor: {
-      provider: "HUBSPOT",
-      label: "HubSpot",
-      emoji: "🟠",
-      capabilities: ["crm"],
-      blurb: "CRM — inbound leads, outbound activity",
-      configFields: [apiKeyField("Private app token (pat-na1-…)")],
-    },
-    crmLeads: [
-      { externalId: "hs-3101", title: "Water heater replacement inquiry", contactName: "Dana Whitfield", phone: "555-0161", email: "dana.w@example.com", expectedRevenueCents: 285000, stage: "Appointment scheduled" },
-      { externalId: "hs-3102", title: "Commercial backflow testing (3 sites)", contactName: "R. Okafor — Lakeview Property Mgmt", email: "ops@lakeviewpm.example.com", expectedRevenueCents: 120000, stage: "Qualified" },
-    ],
-  }),
+  // CRM — HubSpot is a real CRM v3 REST implementation.
+  HUBSPOT: hubspotConnector,
 
   SALESFORCE: makeStub({
     descriptor: {
@@ -184,20 +176,11 @@ export const REGISTRY: Record<string, Connector> = {
     ],
   }),
 
-  // Accounting
-  QUICKBOOKS: makeStub({
-    descriptor: {
-      provider: "QUICKBOOKS",
-      label: "QuickBooks",
-      emoji: "📗",
-      capabilities: ["accounting"],
-      blurb: "Accounting — invoices, payments, GL sync",
-      configFields: [
-        { key: "realmId", label: "Company (realm) ID", kind: "text", placeholder: "9341453888888", required: true },
-        apiKeyField("OAuth access token"),
-      ],
-    },
-  }),
+  // Accounting — QuickBooks Online is a real Accounting API v3 implementation.
+  QUICKBOOKS: quickbooksConnector,
+
+  // Procurement — real cXML 1.2 punchout handshake (supplier-agnostic).
+  CXML_SUPPLIER: cxmlSupplierConnector,
 
   XERO: makeStub({
     descriptor: {
@@ -339,7 +322,7 @@ export function getConnector(provider: string): Connector | undefined {
   return REGISTRY[provider];
 }
 
-const CAPABILITY_ORDER: ConnectorCapability[] = ["crm", "accounting", "jobs", "messaging", "pm"];
+const CAPABILITY_ORDER: ConnectorCapability[] = ["crm", "accounting", "procurement", "jobs", "messaging", "pm"];
 
 /** Registry grouped by capability, in hub display order (CRM first — required). */
 export function listByCapability(): Array<{ capability: ConnectorCapability; connectors: Connector[] }> {

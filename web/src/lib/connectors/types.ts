@@ -14,7 +14,7 @@
 
 // ── Capabilities ─────────────────────────────────────────────────────────────
 
-export type ConnectorCapability = "crm" | "accounting" | "jobs" | "messaging" | "pm";
+export type ConnectorCapability = "crm" | "accounting" | "jobs" | "messaging" | "pm" | "procurement";
 
 export const CAPABILITY_LABELS: Record<ConnectorCapability, string> = {
   crm: "CRM",
@@ -22,6 +22,7 @@ export const CAPABILITY_LABELS: Record<ConnectorCapability, string> = {
   jobs: "Job apps",
   messaging: "Messaging",
   pm: "Project management",
+  procurement: "Suppliers / procurement",
 };
 
 // ── Descriptor (drives the integrations hub UI) ──────────────────────────────
@@ -175,6 +176,15 @@ export interface PmOps {
   pushTask(task: ExternalTask): Promise<PushResult>;
 }
 
+/** Supplier punchout: start a cXML catalog session; the cart returns via BrowserFormPost. */
+export interface ProcurementOps {
+  setupPunchout(params: {
+    buyerCookie: string;
+    returnUrl: string;
+    userEmail?: string;
+  }): Promise<{ ok: boolean; degraded: boolean; startPageUrl?: string; message?: string }>;
+}
+
 // ── The connector ────────────────────────────────────────────────────────────
 
 /**
@@ -190,6 +200,7 @@ export interface Connector {
   messaging?: (config: ConnectorConfig) => MessagingOps;
   jobs?: (config: ConnectorConfig) => JobsOps;
   pm?: (config: ConnectorConfig) => PmOps;
+  procurement?: (config: ConnectorConfig) => ProcurementOps;
 }
 
 /** Shared helper: which required config fields are missing? */

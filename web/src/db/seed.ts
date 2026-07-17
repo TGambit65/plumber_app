@@ -151,6 +151,18 @@ async function main() {
               ],
             },
           ],
+          // Pack-scoped custom fields (constraint 1): richer fuel-domain
+          // equipment records WITHOUT trade-specific core columns.
+          customFields: [
+            { key: "capacityGal", label: "Capacity", entity: "equipment", kind: "number", unit: "gal", required: true, appliesToKinds: ["Underground Storage Tank (UST)", "Aboveground Storage Tank (AST)"] },
+            { key: "product", label: "Product stored", entity: "equipment", kind: "select", options: ["Gasoline", "Diesel", "Kerosene", "DEF", "Aviation Fuel", "Used Oil"], required: true, appliesToKinds: ["Underground Storage Tank (UST)", "Aboveground Storage Tank (AST)"] },
+            { key: "doubleWall", label: "Double-wall construction", entity: "equipment", kind: "boolean", appliesToKinds: ["Underground Storage Tank (UST)", "Aboveground Storage Tank (AST)"] },
+            { key: "leakDetection", label: "Leak detection", entity: "equipment", kind: "select", options: ["ATG", "Interstitial sensor", "SIR", "Manual gauging"], appliesToKinds: ["Underground Storage Tank (UST)"] },
+            { key: "installYear", label: "Install year", entity: "equipment", kind: "number", appliesToKinds: ["Underground Storage Tank (UST)", "Aboveground Storage Tank (AST)"] },
+            { key: "hoseCount", label: "Hose positions", entity: "equipment", kind: "number", required: true, appliesToKinds: ["Fuel Dispenser"] },
+            { key: "meterSerial", label: "Meter serial", entity: "equipment", kind: "text", appliesToKinds: ["Fuel Dispenser"] },
+            { key: "lastWmSealDate", label: "Last W&M seal", entity: "equipment", kind: "date", appliesToKinds: ["Fuel Dispenser"] },
+          ],
         },
       },
       {
@@ -962,8 +974,8 @@ async function main() {
   const [tank1] = await db
     .insert(t.equipment)
     .values([
-      { propertyId: fuelProp.id, kind: "Underground Storage Tank (UST)", brand: "Containment Solutions", model: "DW-12000", serial: "UST-412-A", installedAt: daysFromNow(-2600), notes: "12,000 gal double-wall, regular unleaded" },
-      { propertyId: fuelProp.id, kind: "Fuel Dispenser", brand: "Gilbarco", model: "Encore 700S", serial: "MPD-412-03", installedAt: daysFromNow(-1200), notes: "MPD #3 — W&M seal due" },
+      { propertyId: fuelProp.id, kind: "Underground Storage Tank (UST)", brand: "Containment Solutions", model: "DW-12000", serial: "UST-412-A", installedAt: daysFromNow(-2600), notes: "Regular unleaded", customFields: { capacityGal: 12000, product: "Gasoline", doubleWall: true, leakDetection: "ATG", installYear: 2019 } },
+      { propertyId: fuelProp.id, kind: "Fuel Dispenser", brand: "Gilbarco", model: "Encore 700S", serial: "MPD-412-03", installedAt: daysFromNow(-1200), notes: "MPD #3 — W&M seal due", customFields: { hoseCount: 2, meterSerial: "GM-88213", lastWmSealDate: "2025-08-02" } },
       { propertyId: fuelProp.id, kind: "Cardlock System", brand: "OPW", model: "FMS", serial: "CL-412", installedAt: daysFromNow(-800) },
     ])
     .returning();

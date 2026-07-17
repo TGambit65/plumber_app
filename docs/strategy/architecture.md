@@ -223,8 +223,41 @@ Four seeded tenants now demonstrate composition + isolation: Apex Plumbing
 (plumbing+sewer), Summit HVAC (hvac+plumbing), American Automators
 (aa_field_ops), Mascott Fuel Services (fuel_equipment).
 
-Remaining depth: real IdP/OIDC signature verification, supplier punchout, live
-connector implementations beyond Odoo, and the fuel domain's richer equipment
-records (dispenser/tank sub-attributes) as pack-scoped custom fields.
-(Offline-first is now complete end-to-end — capture, durable queue, binary
-photo upload, and PWA app shell all shipped and verified.)
+All previously listed depth items are now DONE and verified:
+
+- **Verified OIDC federation**: the per-org SSO flow is fully hardened —
+  discovery-document endpoint resolution (issuer must match), PKCE S256 +
+  `nonce` + `state` carried in a SIGNED httpOnly transaction cookie
+  (`src/lib/sso-txn.ts`), and id_token signature verification against the IdP
+  JWKS (jose `createRemoteJWKSet`) with `iss`/`aud`/`exp`/`nonce` checks; only
+  asymmetric algs accepted. Verified end-to-end against a mock RS256 IdP
+  (`scripts/mock-idp.mjs`): happy path mints a session; bad signature, wrong
+  nonce, wrong audience, forged state, and missing cookie ALL bounce to
+  `/login?error=sso`.
+- **Live connectors beyond Odoo**: HubSpot CRM (v3/v4 REST — deals search +
+  association/contact batch reads → leads, contact upsert deduped by email,
+  timeline notes) and QuickBooks Online (Accounting API v3 — customer
+  find-or-create, invoice + linked payment push, cents↔decimal at the
+  boundary) are REAL typed implementations in `src/lib/connectors/`,
+  integration-tested against vendor-shaped mock servers incl. 401/429 paths.
+- **Pack-scoped custom fields**: `tradePacks.config.customFields` carries
+  typed per-entity defs (text/number/select/date/boolean, per-kind scoping);
+  values live in `equipment.custom_fields` jsonb; validation is server-side
+  (`src/lib/custom-fields.ts`, unit-tested) and rejects unknown keys/forged
+  options. The fuel pack ships UST/AST/dispenser sub-attributes (capacity,
+  product, double-wall, leak detection, hose count, W&M seal date …).
+  Verified: Mascott sees + round-trips fuel fields, Apex sees none, forged
+  select values are rejected server-side.
+- **Supplier punchout (cXML 1.2)**: real PunchOutSetupRequest handshake via
+  the typed `CXML_SUPPLIER` connector (new `procurement` capability), catalog
+  redirect, and PunchOutOrderMessage cart return on `/api/punchout/return`
+  (buyerCookie capability token via a SECURITY DEFINER lookup — the supplier's
+  cross-site POST carries no session). Carts are APPROVAL-GATED (constraint
+  8): an `approvals.manage` holder converts lines to estimate line items at a
+  parts markup; sales sees "awaiting approver". Verified end-to-end against a
+  mock supplier (`scripts/mock-supplier.mjs`): full loop, markup math,
+  cross-tenant 404, forged-cookie 404.
+
+Remaining niceties (non-blocking): at-rest offline-queue encryption,
+per-field merge UI, and OAuth token refresh for QuickBooks (config takes a
+live access token today).

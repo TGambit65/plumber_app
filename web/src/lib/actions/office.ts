@@ -9,6 +9,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import bcrypt from "bcryptjs";
 import { lineTotal, money, fmtDateTime } from "@/lib/format";
+import { enabledCustomFieldDefs, enabledEquipmentKinds } from "@/lib/trade-packs";
+import { validateCustomFieldValues } from "@/lib/custom-fields";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 
@@ -191,6 +193,60 @@ export async function addProperty(formData: FormData) {
   await logActivity({
     kind: "SYSTEM",
     body: `Property added: ${address}, ${city}`,
+    userId: session.userId,
+    customerId,
+  });
+  revalidatePath(`/customers/${customerId}`);
+}
+
+/**
+ * Add equipment to a property, including PACK-SCOPED CUSTOM FIELDS
+ * (constraint 1): the submitted cf_* values are validated against the custom-
+ * field definitions composed from the org's ENABLED packs only — a tenant can
+ * never store a field its packs don't declare, and required/typed rules are
+ * enforced server-side.
+ */
+export async function addEquipment(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "customers.edit")) throw new Error("Not allowed");
+  const customerId = str(formData, "customerId");
+  const propertyId = str(formData, "propertyId");
+  const kind = str(formData, "kind");
+  if (!customerId || !propertyId || !kind) return;
+
+  // The kind itself must come from the org's enabled packs — no freetext kinds.
+  const kinds = await enabledEquipmentKinds(session.organizationId);
+  if (!kinds.includes(kind)) throw new Error(`Equipment kind '${kind}' is not provided by an enabled trade pack`);
+
+  // Collect cf_* inputs and validate them against the enabled packs' defs.
+  const raw: Record<string, string> = {};
+  formData.forEach((v, k) => {
+    if (k.startsWith("cf_") && typeof v === "string" && v.trim()) raw[k.slice(3)] = v.trim();
+  });
+  const defs = await enabledCustomFieldDefs(session.organizationId);
+  const validated = validateCustomFieldValues(defs, "equipment", kind, raw);
+  if (!validated.ok) throw new Error(`Custom field validation failed: ${validated.errors.join("; ")}`);
+
+  const installedAt = str(formData, "installedAt");
+  await withTenant(session.organizationId, (tx) =>
+    tx.insert(t.equipment).values({
+      propertyId,
+      kind,
+      brand: str(formData, "brand") || null,
+      model: str(formData, "model") || null,
+      serial: str(formData, "serial") || null,
+      installedAt: installedAt ? new Date(installedAt) : null,
+      notes: str(formData, "notes") || null,
+      customFields: Object.keys(validated.values).length > 0 ? validated.values : null,
+    })
+  );
+  await audit(session.userId, "CREATE", "Equipment", kind, {
+    propertyId,
+    customFieldKeys: Object.keys(validated.values),
+  });
+  await logActivity({
+    kind: "SYSTEM",
+    body: `Equipment added: ${kind}`,
     userId: session.userId,
     customerId,
   });

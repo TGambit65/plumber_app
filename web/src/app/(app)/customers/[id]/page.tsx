@@ -4,7 +4,10 @@ import { t, withTenant } from "@/db";
 import { desc, eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
-import { addProperty, logCustomerActivity, updatePropertyMemory } from "@/lib/actions/office";
+import { addEquipment, addProperty, logCustomerActivity, updatePropertyMemory } from "@/lib/actions/office";
+import { enabledCustomFieldDefs, enabledEquipmentKinds } from "@/lib/trade-packs";
+import { displayPairs } from "@/lib/custom-fields";
+import { EquipmentForm } from "@/components/office/equipment-form";
 import {
   Badge,
   Button,
@@ -59,6 +62,12 @@ export default async function CustomerDetailPage({ params }: { params: { id: str
   if (!customer) notFound();
 
   const canEdit = can(session.role, "customers.edit");
+  // Pack-scoped equipment composition: kinds + custom-field defs from the
+  // org's ENABLED trade packs only (constraint 1).
+  const [equipmentKinds, customFieldDefs] = await Promise.all([
+    enabledEquipmentKinds(session.organizationId),
+    enabledCustomFieldDefs(session.organizationId),
+  ]);
   const openJobs = customer.jobs.filter((j) => OPEN_JOB.has(j.status));
   const pastJobs = customer.jobs.filter((j) => !OPEN_JOB.has(j.status));
 
@@ -141,18 +150,43 @@ export default async function CustomerDetailPage({ params }: { params: { id: str
                       <div className="mt-2 border-t border-slate-100 pt-2">
                         <div className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">Equipment</div>
                         <ul className="space-y-1 text-xs text-slate-700">
-                          {p.equipment.map((e) => (
-                            <li key={e.id}>
-                              🔩 <span className="font-medium">{e.kind}</span>
-                              {e.brand ? ` — ${e.brand}` : ""}
-                              {e.model ? ` ${e.model}` : ""}
-                              {e.serial ? <span className="text-slate-400"> · S/N {e.serial}</span> : ""}
-                              {e.installedAt ? <span className="text-slate-400"> · installed {fmtDate(e.installedAt)}</span> : ""}
-                              {e.notes ? <div className="ml-5 text-slate-500">{e.notes}</div> : null}
-                            </li>
-                          ))}
+                          {p.equipment.map((e) => {
+                            const pairs = displayPairs(customFieldDefs, "equipment", e.kind, e.customFields);
+                            return (
+                              <li key={e.id}>
+                                🔩 <span className="font-medium">{e.kind}</span>
+                                {e.brand ? ` — ${e.brand}` : ""}
+                                {e.model ? ` ${e.model}` : ""}
+                                {e.serial ? <span className="text-slate-400"> · S/N {e.serial}</span> : ""}
+                                {e.installedAt ? <span className="text-slate-400"> · installed {fmtDate(e.installedAt)}</span> : ""}
+                                {e.notes ? <div className="ml-5 text-slate-500">{e.notes}</div> : null}
+                                {pairs.length > 0 ? (
+                                  <div className="ml-5 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-slate-500">
+                                    {pairs.map((cf) => (
+                                      <span key={cf.key}>
+                                        <span className="text-slate-400">{cf.label}:</span> {cf.value}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </li>
+                            );
+                          })}
                         </ul>
                       </div>
+                    ) : null}
+
+                    {canEdit ? (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-xs font-medium text-blue-600">＋ Add equipment</summary>
+                        <EquipmentForm
+                          customerId={customer.id}
+                          propertyId={p.id}
+                          kinds={equipmentKinds}
+                          defs={customFieldDefs}
+                          action={addEquipment}
+                        />
+                      </details>
                     ) : null}
 
                     {canEdit ? (

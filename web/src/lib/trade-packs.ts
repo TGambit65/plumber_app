@@ -1,6 +1,7 @@
 import "server-only";
 import { db, t, withTenant } from "@/db";
 import { eq } from "drizzle-orm";
+import type { CustomFieldDef } from "@/lib/custom-fields";
 
 /**
  * Trade-pack composition (constraints 1 & 12).
@@ -28,6 +29,8 @@ export type PackConfig = {
   certTypes?: string[];
   safetyDocs?: string[];
   inspectionTemplates?: PackInspectionTemplate[];
+  /** Typed field definitions this pack adds to core entities (see custom-fields.ts). */
+  customFields?: CustomFieldDef[];
 };
 
 export type PackSummary = {
@@ -51,6 +54,7 @@ function parse(config: unknown) {
     certTypes: Array.isArray(c.certTypes) ? c.certTypes : [],
     safetyDocs: Array.isArray(c.safetyDocs) ? c.safetyDocs : [],
     inspectionTemplates: Array.isArray(c.inspectionTemplates) ? c.inspectionTemplates : [],
+    customFields: Array.isArray(c.customFields) ? c.customFields : [],
   };
 }
 
@@ -90,6 +94,32 @@ export async function enabledEquipmentKinds(organizationId: string): Promise<str
   const seen = new Set<string>();
   for (const r of rows) if (r.tradePack?.active) for (const k of parse(r.tradePack.config).equipmentKinds) seen.add(k);
   return Array.from(seen).sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Union of custom-field definitions from the org's ENABLED packs only
+ * (constraint 1 — fields are pack data, composed per tenant). De-duped by
+ * (entity, key); first enabled pack wins on collision.
+ */
+export async function enabledCustomFieldDefs(organizationId: string): Promise<CustomFieldDef[]> {
+  const rows = await withTenant(organizationId, (tx) =>
+    tx.query.organizationTradePacks.findMany({
+      where: eq(t.organizationTradePacks.organizationId, organizationId),
+      with: { tradePack: true },
+    })
+  );
+  const seen = new Set<string>();
+  const defs: CustomFieldDef[] = [];
+  for (const r of rows) {
+    if (!r.tradePack?.active) continue;
+    for (const d of parse(r.tradePack.config).customFields) {
+      const dedupeKey = `${d.entity}:${d.key}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      defs.push(d);
+    }
+  }
+  return defs.sort((a, b) => a.label.localeCompare(b.label));
 }
 
 /**

@@ -38,6 +38,8 @@ DECLARE
     'conversations', 'conversation_participants', 'messages',
     -- approval-gated egress
     'outbound_messages',
+    -- supplier punchout (buyer-cookie lookup goes through punchout_session_by_cookie below)
+    'punchout_sessions',
     -- claims (PII-sensitive) & compliance
     'carriers', 'adjusters', 'claims', 'claim_supplements',
     'inspection_templates', 'inspections', 'certifications',
@@ -73,3 +75,21 @@ $fn$;
 
 REVOKE ALL ON FUNCTION auth_user_by_email(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION auth_user_by_email(text) TO plumber;
+
+-- Punchout cart return: the supplier's BrowserFormPost arrives WITHOUT a user
+-- session (cross-site POST strips sameSite cookies), so the unguessable
+-- buyer_cookie is the capability token. This is the ONLY global read of
+-- punchout_sessions — it resolves the cookie to (id, organization_id) and the
+-- handler immediately re-enters withTenant(org) for everything else.
+CREATE OR REPLACE FUNCTION punchout_session_by_cookie(p_cookie text)
+RETURNS TABLE (id text, organization_id text, status text)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $fn$
+  SELECT id, organization_id, status FROM punchout_sessions
+  WHERE buyer_cookie = p_cookie LIMIT 1;
+$fn$;
+
+REVOKE ALL ON FUNCTION punchout_session_by_cookie(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION punchout_session_by_cookie(text) TO plumber;

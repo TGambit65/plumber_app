@@ -126,6 +126,8 @@ export const equipment = pgTable("equipment", {
   serial: text("serial"),
   installedAt: timestamp("installed_at", { withTimezone: true }),
   notes: text("notes"),
+  /** Pack-scoped custom field values (defs live in tradePacks.config.customFields). */
+  customFields: jsonb("custom_fields"),
 });
 
 export const memberships = pgTable("memberships", {
@@ -1095,6 +1097,38 @@ export const outboundMessages = pgTable("outbound_messages", {
   rejectReason: text("reject_reason"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ── Supplier punchout (cXML procurement) ─────────────────────────────────────
+
+/**
+ * One punchout round-trip to a supplier catalog (cXML PunchOutSetupRequest →
+ * supplier StartPage → PunchOutOrderMessage cart return). The cart NEVER
+ * lands on the estimate directly — an office/admin approves it first
+ * (constraint 8: approval-gated), converting lines to estimate_line_items.
+ * `buyerCookie` is the unguessable capability token the supplier echoes back.
+ */
+export const punchoutSessions = pgTable("punchout_sessions", {
+  id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
+  provider: text("provider").notNull(), // integration_connections.provider key
+  supplierName: text("supplier_name"),
+  status: text("status").notNull().default("STARTED"), // STARTED | CART_RETURNED | APPROVED | REJECTED
+  estimateOptionId: text("estimate_option_id").notNull().references(() => estimateOptions.id, { onDelete: "cascade" }),
+  buyerCookie: text("buyer_cookie").notNull().unique(),
+  /** Parsed PunchOutOrderMessage lines: [{supplierPartId, description, qty, unitPriceCents, uom}] */
+  cart: jsonb("cart"),
+  requestedById: text("requested_by_id").notNull().references(() => users.id),
+  decidedById: text("decided_by_id").references(() => users.id),
+  returnedAt: timestamp("returned_at", { withTimezone: true }),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const punchoutSessionsRelations = relations(punchoutSessions, ({ one }) => ({
+  estimateOption: one(estimateOptions, { fields: [punchoutSessions.estimateOptionId], references: [estimateOptions.id] }),
+  requestedBy: one(users, { fields: [punchoutSessions.requestedById], references: [users.id] }),
+  decidedBy: one(users, { fields: [punchoutSessions.decidedById], references: [users.id] }),
+}));
 
 export const outboundMessagesRelations = relations(outboundMessages, ({ one }) => ({
   customer: one(customers, { fields: [outboundMessages.customerId], references: [customers.id] }),

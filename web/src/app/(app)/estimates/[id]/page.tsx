@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { t, withTenant } from "@/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
+import { approvePunchoutCart, rejectPunchoutCart, startPunchout } from "@/lib/actions/punchout";
+import { readCartLines } from "@/lib/punchout/cxml";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { fmtDateTime, lineTotal, money, monthly, timeAgo } from "@/lib/format";
@@ -54,7 +56,7 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
   const session = await requireSession();
   if (!can(session.role, "estimates.create")) return <Forbidden />;
 
-  const { est, priceBook } = await withTenant(session.organizationId, async (tx) => {
+  const { est, priceBook, supplierConn, punchouts } = await withTenant(session.organizationId, async (tx) => {
     const est = await tx.query.estimates.findFirst({
       where: eq(t.estimates.id, params.id),
       with: {
@@ -74,9 +76,28 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
             orderBy: [t.priceBookItems.category, t.priceBookItems.name],
           })
         : [];
-    return { est, priceBook };
+    // Supplier punchout: the org's connection + any carts awaiting review.
+    const [supplierConn] = await tx
+      .select()
+      .from(t.integrationConnections)
+      .where(eq(t.integrationConnections.provider, "CXML_SUPPLIER"));
+    const punchouts = est
+      ? await tx.query.punchoutSessions.findMany({
+          where: inArray(
+            t.punchoutSessions.estimateOptionId,
+            est.options.map((o) => o.id)
+          ),
+          with: { requestedBy: true },
+        })
+      : [];
+    return { est, priceBook, supplierConn, punchouts };
   });
   if (!est) notFound();
+
+  const punchoutConnected = supplierConn?.status === "CONNECTED";
+  const supplierName = ((supplierConn?.config ?? {}) as { supplierName?: string }).supplierName ?? "supplier";
+  const returnedCarts = punchouts.filter((p) => p.status === "CART_RETURNED");
+  const canApproveCarts = can(session.role, "approvals.manage");
 
   const editable = ["DRAFT", "SENT", "VIEWED"].includes(est.status);
 
@@ -323,6 +344,17 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
                     </form>
                   ) : null}
 
+                  {/* Supplier punchout (cXML) — parts from the supplier catalog */}
+                  {editable && punchoutConnected ? (
+                    <form action={startPunchout} className="mt-1">
+                      <input type="hidden" name="optionId" value={o.id} />
+                      <input type="hidden" name="estimateId" value={est.id} />
+                      <Button size="sm" variant="secondary" className="w-full">
+                        🛒 Punch out to {supplierName}
+                      </Button>
+                    </form>
+                  ) : null}
+
                   {/* Total + financing framing */}
                   <div className="mt-auto border-t border-slate-100 pt-3 text-center">
                     <div className={clsx("text-2xl font-bold tabular-nums", isBest ? "text-blue-700" : "text-slate-900")}>
@@ -340,6 +372,68 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
           })}
         </div>
       )}
+
+      {/* Supplier carts awaiting approval (constraint 8 — approval-gated) */}
+      {returnedCarts.length > 0 ? (
+        <Card className="mt-4 border-amber-200">
+          <CardHeader
+            title={`🛒 Supplier cart${returnedCarts.length > 1 ? "s" : ""} awaiting approval`}
+            subtitle="Punched-out parts never land on the estimate until an approver accepts them."
+          />
+          <CardBody className="space-y-3">
+            {returnedCarts.map((po) => {
+              const lines = readCartLines(po.cart);
+              const total = lines.reduce((s, l) => s + Math.round(l.unitPriceCents * l.qty), 0);
+              const optName = options.find((o) => o.id === po.estimateOptionId)?.name ?? "option";
+              return (
+                <div key={po.id} className="rounded-lg border border-slate-200 p-3">
+                  <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
+                    <span className="font-semibold text-slate-800">{po.supplierName}</span>
+                    <span className="text-slate-500">→ {optName}</span>
+                    <Badge tone="amber">Cart returned</Badge>
+                    <span className="ml-auto text-xs text-slate-500">
+                      requested by {po.requestedBy?.name ?? "—"}
+                      {po.returnedAt ? ` · ${fmtDateTime(po.returnedAt)}` : ""}
+                    </span>
+                  </div>
+                  <ul className="space-y-1 text-xs text-slate-700">
+                    {lines.map((l, i) => (
+                      <li key={i} className="flex items-baseline gap-2">
+                        <span className="text-slate-400">#{l.supplierPartId}</span>
+                        <span>{l.description}</span>
+                        <span className="ml-auto tabular-nums">
+                          {l.qty} {l.uom} × {money(l.unitPriceCents)} = {money(Math.round(l.unitPriceCents * l.qty))}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="mt-2 flex items-center gap-2 border-t border-slate-100 pt-2">
+                    <span className="text-sm font-semibold text-slate-800">Supplier total: {money(total)}</span>
+                    {canApproveCarts ? (
+                      <div className="ml-auto flex gap-2">
+                        <form action={rejectPunchoutCart}>
+                          <input type="hidden" name="sessionId" value={po.id} />
+                          <input type="hidden" name="estimateId" value={est.id} />
+                          <Button size="sm" variant="secondary">
+                            Reject
+                          </Button>
+                        </form>
+                        <form action={approvePunchoutCart}>
+                          <input type="hidden" name="sessionId" value={po.id} />
+                          <input type="hidden" name="estimateId" value={est.id} />
+                          <Button size="sm">Approve → add to estimate</Button>
+                        </form>
+                      </div>
+                    ) : (
+                      <span className="ml-auto text-xs text-slate-500">Awaiting an approver (office/admin)</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </CardBody>
+        </Card>
+      ) : null}
 
       {/* Add option */}
       {editable ? (
