@@ -1,0 +1,14 @@
+import { chromium } from "playwright";
+const BASE="http://localhost:3000";
+const b=await chromium.launch({executablePath:"/opt/pw-browsers/chromium"});
+const p=await (await b.newContext({viewport:{width:1440,height:900}})).newPage();
+await p.goto(`${BASE}/login`);
+await p.fill('input[name=email]','owner@plumbzebra.demo');
+await p.fill('input[name=password]','demo1234');
+await p.click('button[type=submit]');
+await p.waitForLoadState("networkidle");
+const nav=(await p.textContent("body")).replace(/\s+/g," ");
+console.log("logged in as owner, url:", p.url());
+console.log("shows 'Plumb Zebra':", nav.includes("Plumb Zebra"));
+console.log("no 'Apex':", !nav.includes("Apex"));
+await b.close();

@@ -6,12 +6,10 @@ import type { Role } from "@/lib/auth";
 export const metadata = { title: "Sign in" };
 
 const DEMO_ACCOUNTS: { email: string; role: Role; org: string }[] = [
-  { email: "owner@apexplumbing.demo", role: "ADMIN", org: "Apex Plumbing" },
-  { email: "sales@apexplumbing.demo", role: "SALES_PM", org: "Apex Plumbing" },
-  { email: "tech@apexplumbing.demo", role: "TECH", org: "Apex Plumbing" },
-  { email: "owner@summithvac.demo", role: "ADMIN", org: "Summit HVAC" },
-  { email: "owner@americanautomators.demo", role: "ADMIN", org: "American Automators" },
-  { email: "owner@mascottfuel.demo", role: "ADMIN", org: "Mascott Fuel Services" },
+  { email: "owner@plumbzebra.demo", role: "ADMIN", org: "Owner / Admin" },
+  { email: "office@plumbzebra.demo", role: "OFFICE", org: "Dispatcher" },
+  { email: "sales@plumbzebra.demo", role: "SALES_PM", org: "Sales / PM" },
+  { email: "tech@plumbzebra.demo", role: "TECH", org: "Technician" },
 ];
 
 async function login(formData: FormData) {
@@ -44,8 +42,8 @@ export default async function LoginPage({ searchParams }: { searchParams: { erro
     <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-navy via-brand-900 to-slate-900 p-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 text-3xl">🔧</div>
-          <h1 className="text-2xl font-bold text-white">Apex Plumbing</h1>
+          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 text-3xl">🦓</div>
+          <h1 className="text-2xl font-bold text-white">Plumb Zebra</h1>
           <p className="mt-1 text-sm text-blue-200">Sales-first. Field-tough. One platform.</p>
         </div>
 
@@ -107,7 +105,7 @@ export default async function LoginPage({ searchParams }: { searchParams: { erro
                 type="text"
                 autoComplete="organization"
                 className="h-10 flex-1 rounded-lg border border-slate-300 px-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                placeholder="workspace slug (e.g. apex-plumbing)"
+                placeholder="workspace slug (e.g. plumb-zebra)"
               />
               <button
                 type="submit"

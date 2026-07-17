@@ -1009,7 +1009,7 @@ function CompanyTab() {
           <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
             <div>
               <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Business name</dt>
-              <dd className="mt-0.5 text-slate-800">Apex Plumbing LLC</dd>
+              <dd className="mt-0.5 text-slate-800">Plumb Zebra LLC</dd>
             </div>
             <div>
               <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">License</dt>

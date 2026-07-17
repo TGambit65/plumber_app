@@ -1,8 +1,8 @@
 /* Seed realistic demo data. Run: npm run db:seed
  *
- * Multi-tenant: seeds TWO organizations (Apex Plumbing, Summit HVAC) to prove
- * isolation. All Apex data is inserted with the RLS GUC (app.current_org) set
- * to Apex's id on a DEDICATED connection, so the organization_id column default
+ * Multi-tenant: seeds TWO organizations (Plumb Zebra, Summit HVAC) to prove
+ * isolation. All Plumb Zebra data is inserted with the RLS GUC (app.current_org) set
+ * to Plumb Zebra's id on a DEDICATED connection, so the organization_id column default
  * (current_setting('app.current_org')) populates every row automatically.
  */
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -55,7 +55,7 @@ async function main() {
   const [apex, summit] = await db
     .insert(t.organizations)
     .values([
-      { name: "Apex Plumbing", slug: "apex-plumbing", brandPrimary: "#0057FF" },
+      { name: "Plumb Zebra", slug: "plumb-zebra", brandPrimary: "#0057FF" },
       { name: "Summit HVAC", slug: "summit-hvac", brandPrimary: "#0057FF" },
     ])
     .returning();
@@ -192,7 +192,7 @@ async function main() {
     .returning();
   const packByKey = Object.fromEntries(packs.map((p) => [p.key, p]));
 
-  // ── Everything below is Apex's tenant data (org_id auto-fills from GUC;
+  // ── Everything below is Plumb Zebra's tenant data (org_id auto-fills from GUC;
   //    RLS WITH CHECK requires the GUC to match) ──
   await setOrg(apex.id);
   await db.insert(t.organizationTradePacks).values([
@@ -205,12 +205,12 @@ async function main() {
   const [admin, office, sales, sales2, tech, tech2] = await db
     .insert(t.users)
     .values([
-      { email: "owner@apexplumbing.demo", name: "Dana Whitfield", role: "ADMIN", passwordHash: hash, phone: "555-0100" },
-      { email: "office@apexplumbing.demo", name: "Rosa Jimenez", role: "OFFICE", passwordHash: hash, phone: "555-0101" },
-      { email: "sales@apexplumbing.demo", name: "Marcus Bell", role: "SALES_PM", passwordHash: hash, phone: "555-0102" },
-      { email: "pm@apexplumbing.demo", name: "Priya Nair", role: "SALES_PM", passwordHash: hash, phone: "555-0103" },
-      { email: "tech@apexplumbing.demo", name: "Jake Sullivan", role: "TECH", passwordHash: hash, phone: "555-0104" },
-      { email: "tech2@apexplumbing.demo", name: "Luis Ortega", role: "TECH", passwordHash: hash, phone: "555-0105" },
+      { email: "owner@plumbzebra.demo", name: "Dana Whitfield", role: "ADMIN", passwordHash: hash, phone: "555-0100" },
+      { email: "office@plumbzebra.demo", name: "Rosa Jimenez", role: "OFFICE", passwordHash: hash, phone: "555-0101" },
+      { email: "sales@plumbzebra.demo", name: "Marcus Bell", role: "SALES_PM", passwordHash: hash, phone: "555-0102" },
+      { email: "pm@plumbzebra.demo", name: "Priya Nair", role: "SALES_PM", passwordHash: hash, phone: "555-0103" },
+      { email: "tech@plumbzebra.demo", name: "Jake Sullivan", role: "TECH", passwordHash: hash, phone: "555-0104" },
+      { email: "tech2@plumbzebra.demo", name: "Luis Ortega", role: "TECH", passwordHash: hash, phone: "555-0105" },
     ])
     .returning();
 
@@ -619,7 +619,7 @@ async function main() {
       category: "SOP",
       tags: ["communication", "customer service"],
       authorId: office.id,
-      body: `## On my way (auto-sent by app)\n"Hi {first name}, this is {tech} from Apex Plumbing. I'm on my way and should arrive around {ETA}. Reply here with any access notes!"\n\n## Arrival\nIntroduce yourself by name, shoe covers on at the door, confirm the issue in the customer's words before opening the tool bag.\n\n## Presenting options\nAlways present all options on the tablet, top tier first, monthly payment visible. Let the customer choose — never pre-filter for them ("I didn't think you'd want the expensive one" is a lost upsell and an insult).`,
+      body: `## On my way (auto-sent by app)\n"Hi {first name}, this is {tech} from Plumb Zebra. I'm on my way and should arrive around {ETA}. Reply here with any access notes!"\n\n## Arrival\nIntroduce yourself by name, shoe covers on at the door, confirm the issue in the customer's words before opening the tool bag.\n\n## Presenting options\nAlways present all options on the tablet, top tier first, monthly payment visible. Let the customer choose — never pre-filter for them ("I didn't think you'd want the expensive one" is a lost upsell and an insult).`,
     },
     {
       slug: "grease-trap-service",
@@ -1012,8 +1012,8 @@ async function main() {
   await db.insert(t.integrationConnections).values([{ provider: "ORGMEMORY", status: "DISCONNECTED" }]);
 
   console.log("✅ Seed complete (4 orgs).");
-  console.log("Apex Plumbing (org A) — password demo1234:");
-  console.log("  owner@apexplumbing.demo · office@ · sales@ · tech@");
+  console.log("Plumb Zebra (org A) — password demo1234:");
+  console.log("  owner@plumbzebra.demo · office@ · sales@ · tech@");
   console.log("Summit HVAC (org B) — password demo1234:");
   console.log("  owner@summithvac.demo · tech@summithvac.demo");
   console.log("American Automators (org C) — password demo1234:");
