@@ -90,6 +90,7 @@ export default async function KbPage({
   const cat = CATEGORIES.some((c) => c.key === searchParams.cat) ? (searchParams.cat as CatKey) : undefined;
   const isAuthor = can(session.role, "kb.author");
   const store = await getKnowledgeStore();
+  const storeHealth = await store.health();
 
   const conds: SQL[] = [];
   if (q) {
@@ -134,7 +135,11 @@ export default async function KbPage({
         </Button>
       </form>
       <div className="mb-3">
-        {store.semantic ? (
+        {storeHealth.degraded ? (
+          <Badge tone="red">
+            ⚠️ OrgMemory unreachable — serving local keyword search (degraded)
+          </Badge>
+        ) : storeHealth.semantic ? (
           <Badge tone="violet">🧠 Semantic search via OrgMemory</Badge>
         ) : (
           <Badge tone="slate">🔎 Keyword search · connect OrgMemory in Settings for semantic search</Badge>

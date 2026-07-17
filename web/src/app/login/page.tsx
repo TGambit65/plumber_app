@@ -27,7 +27,7 @@ export default async function LoginPage({ searchParams }: { searchParams: { erro
   if (session) redirect(ROLE_HOME[session.role]);
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-blue-900 via-blue-800 to-slate-900 p-4">
+    <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-navy via-brand-900 to-slate-900 p-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
           <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 text-3xl">🔧</div>

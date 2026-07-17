@@ -55,8 +55,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="flex min-h-screen">
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-56 flex-col border-r border-slate-200 bg-slate-900 md:flex">
-        <div className="flex h-14 items-center gap-2 border-b border-slate-800 px-4">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-56 flex-col border-r border-slate-200 bg-brand-navy md:flex">
+        <div className="flex h-14 items-center gap-2 border-b border-white/10 px-4">
           <span className="text-xl">🔧</span>
           <div>
             <div className="text-sm font-bold text-white">Apex Plumbing</div>
@@ -66,7 +66,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <nav className="flex-1 space-y-0.5 overflow-y-auto p-2">
           <NavLinks items={nav} badges={{ "/messages": unreadMessages }} />
         </nav>
-        <div className="border-t border-slate-800 p-3">
+        <div className="border-t border-white/10 p-3">
           <div className="flex items-center gap-2">
             <Avatar name={session.name} />
             <div className="min-w-0 flex-1">

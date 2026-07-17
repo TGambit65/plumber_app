@@ -59,10 +59,20 @@ export async function createKbArticle(formData: FormData) {
     .returning();
   await audit(session.userId, "CREATE", "KbArticle", article.id, { title, category });
 
-  // Mirror into the company knowledge substrate (OrgMemory) when connected.
+  // Stage into the company knowledge substrate (OrgMemory) when connected.
+  // Constraint 6: this is a STAGED CANDIDATE — a human reviewer promotes to canon.
   const { getKnowledgeStore } = await import("@/lib/knowledge/store");
   const store = await getKnowledgeStore();
-  await store.ingest({ id: article.id, slug, title, category, body, tags });
+  const result = await store.stageDocument({ id: article.id, slug, title, category, body, tags });
+  if (result.degraded) {
+    // Loud, visible failure — never silently pretend the mirror worked.
+    await notify(
+      session.userId,
+      "⚠️ OrgMemory staging failed",
+      `Article saved locally, but staging to OrgMemory failed: ${result.message ?? "gateway unreachable"}. Reconnect in Settings → Integrations.`,
+      "/settings?tab=integrations"
+    );
+  }
 
   revalidatePath("/kb");
   redirect(`/kb/${slug}`);

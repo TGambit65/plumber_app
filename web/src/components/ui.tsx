@@ -108,7 +108,7 @@ export function statusLabel(s: string): string {
 
 // ── Buttons ──────────────────────────────────────────────────────────────────
 const buttonVariants = {
-  primary: "bg-blue-600 text-white hover:bg-blue-700 focus-visible:ring-blue-500",
+  primary: "bg-brand-blue text-white hover:bg-brand-600 focus-visible:ring-brand-blue",
   secondary: "bg-white text-slate-700 border border-slate-300 hover:bg-slate-50",
   danger: "bg-red-600 text-white hover:bg-red-700",
   success: "bg-emerald-600 text-white hover:bg-emerald-700",

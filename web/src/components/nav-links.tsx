@@ -31,7 +31,7 @@ export function NavLinks({ items, badges }: { items: NavItem[]; badges?: Record<
             href={item.href}
             className={clsx(
               "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
-              active ? "bg-blue-600 font-medium text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"
+              active ? "bg-brand-blue font-medium text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"
             )}
           >
             <span className="text-base leading-none">{item.icon}</span>
@@ -57,7 +57,7 @@ export function MobileNav({ items, badges }: { items: NavItem[]; badges?: Record
             href={item.href}
             className={clsx(
               "relative flex min-h-[52px] flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-medium",
-              active ? "text-blue-600" : "text-slate-500"
+              active ? "text-brand-blue" : "text-slate-500"
             )}
           >
             <span className="text-lg leading-none">{item.icon}</span>
