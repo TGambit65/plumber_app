@@ -96,7 +96,10 @@ let lastError: string | null = null;
 let listenersWired = false;
 
 function isOnline(): boolean {
-  return typeof navigator === "undefined" ? true : navigator.onLine;
+  // Node 22 exposes a global `navigator` WITHOUT `onLine`, so guard on the
+  // property type, not just navigator's existence. Assume online when unknown.
+  if (typeof navigator === "undefined" || typeof navigator.onLine !== "boolean") return true;
+  return navigator.onLine;
 }
 
 function uuid(): string {

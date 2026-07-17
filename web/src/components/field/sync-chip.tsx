@@ -18,7 +18,12 @@ export function SyncChip({ className }: { className?: string }) {
     return () => window.removeEventListener("tradeops-sync", onSync as EventListener);
   }, []);
 
-  const online = state?.online ?? (typeof navigator !== "undefined" ? navigator.onLine : true);
+  // Default to "online" until the sync client emits real state (on mount).
+  // Do NOT read navigator here: Node 22 defines a global `navigator` WITHOUT
+  // `onLine`, so an SSR read yields `undefined` → "Offline", mismatching the
+  // browser's "Synced" and causing a hydration error. The boot effect calls
+  // emitState() right after mount, so the true status arrives within a tick.
+  const online = state?.online ?? true;
   // A photo capture is a pending item too — count both so nothing looks "synced"
   // while a photo is still queued for upload.
   const pending = (state?.pending ?? 0) + (state?.pendingPhotos ?? 0);
