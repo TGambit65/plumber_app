@@ -63,14 +63,119 @@ async function main() {
   const packs = await db
     .insert(t.tradePacks)
     .values([
-      { key: "plumbing", name: "Plumbing", description: "Reference trade pack: water heaters, drains, repipe, fixtures.", config: { jobTypes: ["Water Heater Replacement", "Water Heater Service", "Drain Clearing", "Leak Repair", "Toilet Install", "Faucet Install", "Sump Pump Install", "Repipe", "Gas Line"] } },
-      { key: "hvac", name: "HVAC", description: "Heating, ventilation & air conditioning.", config: { jobTypes: ["AC Tune-Up", "RTU Maintenance", "Furnace Repair", "Mini-Split Install", "Refrigerant Recharge"] } },
-      { key: "sewer", name: "Septic / Sewer", description: "Camera inspection, jetting, line repair.", config: { jobTypes: ["Camera Inspection", "Hydro-Jetting", "Sewer Line Repair", "Septic Pumping"] } },
-      { key: "electrical", name: "Electrical", description: "Panels, permits, service upgrades." },
-      { key: "restoration", name: "Restoration", description: "Water/fire/mold — insurance-heavy." },
-      { key: "roofing", name: "Roofing", description: "Insurance-heavy; claim-linked documentation." },
-      { key: "fuel_equipment", name: "Fuel Equipment", description: "UST/dispenser/cardlock — design partner Mascott.", config: { jobTypes: ["Dispenser Service", "UST Tank Test", "Cardlock Maintenance", "Leak Detection Test"] } },
-      { key: "aa_field_ops", name: "AA Field-Ops", description: "American Automators dogfood: Acorn tiers + on-prem installs.", config: { jobTypes: ["Site Survey", "Acorn Starter Install", "Acorn Pro Install", "Acorn Enterprise Install", "On-Prem Hardware Service", "Network Commissioning"] } },
+      {
+        key: "plumbing",
+        name: "Plumbing",
+        description: "Reference trade pack: water heaters, drains, repipe, fixtures.",
+        config: {
+          jobTypes: ["Water Heater Replacement", "Water Heater Service", "Drain Clearing", "Leak Repair", "Toilet Install", "Faucet Install", "Sump Pump Install", "Repipe", "Gas Line"],
+          equipmentKinds: ["Water Heater", "Tankless Water Heater", "Sump Pump", "Backflow Assembly", "Water Softener"],
+          certTypes: ["Journeyman Plumber License", "Master Plumber License", "Backflow Prevention Test Certificate", "Med-Gas Brazing Certification"],
+          inspectionTemplates: [
+            {
+              name: "Backflow Prevention Assembly Test",
+              description: "Annual RPZ/DCVA test per local water authority.",
+              issuesCertification: "Backflow Prevention Test Certificate",
+              certValidityDays: 365,
+              steps: [
+                { key: "shutoff", label: "Isolate assembly — shutoff valves hold", kind: "check", required: true },
+                { key: "rv_psid", label: "Relief valve opening point (PSID)", kind: "measurement", unit: "PSID", required: true },
+                { key: "cv1", label: "Check valve #1 holds tight", kind: "check", required: true },
+                { key: "photo", label: "Photo of gauge readings + assembly tag", kind: "photo", required: true },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        key: "hvac",
+        name: "HVAC",
+        description: "Heating, ventilation & air conditioning.",
+        config: {
+          jobTypes: ["AC Tune-Up", "RTU Maintenance", "Furnace Repair", "Mini-Split Install", "Refrigerant Recharge"],
+          equipmentKinds: ["Rooftop Unit", "Furnace", "Air Handler", "Mini-Split", "Boiler"],
+          certTypes: ["EPA 608 Universal", "HVAC Contractor License", "NATE Certification"],
+          inspectionTemplates: [],
+        },
+      },
+      {
+        key: "sewer",
+        name: "Septic / Sewer",
+        description: "Camera inspection, jetting, line repair.",
+        config: {
+          jobTypes: ["Camera Inspection", "Hydro-Jetting", "Sewer Line Repair", "Septic Pumping"],
+          equipmentKinds: ["Septic Tank", "Lift Station", "Grinder Pump"],
+          certTypes: ["Septic Installer License"],
+          inspectionTemplates: [],
+        },
+      },
+      { key: "electrical", name: "Electrical", description: "Panels, permits, service upgrades.", config: { jobTypes: ["Panel Upgrade", "Service Upgrade", "EV Charger Install", "Troubleshoot"], equipmentKinds: ["Service Panel", "Sub-Panel", "EV Charger"], certTypes: ["Journeyman Electrician License", "Master Electrician License"], inspectionTemplates: [] } },
+      { key: "restoration", name: "Restoration", description: "Water/fire/mold — insurance-heavy.", config: { jobTypes: ["Water Mitigation", "Mold Remediation", "Fire/Smoke Cleanup", "Structural Drying"], equipmentKinds: ["Air Mover", "Dehumidifier", "Air Scrubber"], certTypes: ["IICRC WRT", "IICRC AMRT"], inspectionTemplates: [] } },
+      { key: "roofing", name: "Roofing", description: "Insurance-heavy; claim-linked documentation.", config: { jobTypes: ["Roof Inspection", "Roof Replacement", "Leak Repair", "Storm Damage Assessment"], equipmentKinds: [], certTypes: ["Roofing Contractor License"], inspectionTemplates: [] } },
+      {
+        key: "fuel_equipment",
+        name: "Fuel Equipment",
+        description: "UST/dispenser/cardlock/lube — petroleum service. Design partner: Mascott.",
+        config: {
+          jobTypes: ["Dispenser Service", "Dispenser Calibration", "UST Tank Test", "Cardlock Maintenance", "Lube System Service", "Leak Detection Test", "Line Tightness Test", "Sump Inspection"],
+          equipmentKinds: ["Fuel Dispenser", "Underground Storage Tank (UST)", "Aboveground Storage Tank (AST)", "Cardlock System", "Lube Dispensing System", "Line Leak Detector", "Submersible Turbine Pump"],
+          certTypes: ["UST Operator Class A", "UST Operator Class B", "Weights & Measures Registered Technician", "PEI Certified Installer", "Cathodic Protection Tester"],
+          safetyDocs: ["Hot Work / Confined Space in Fuel Environments", "Static & Vapor Control During Dispenser Service"],
+          inspectionTemplates: [
+            {
+              name: "UST Annual Tightness Test",
+              description: "Underground storage tank + line leak detection per EPA 40 CFR 280 / state UST program.",
+              issuesCertification: "UST Tightness Test Certificate",
+              certValidityDays: 365,
+              steps: [
+                { key: "gauge", label: "Automatic tank gauge (ATG) alarm history reviewed", kind: "check", required: true },
+                { key: "lld", label: "Line leak detector trip test — passes at 3 gph", kind: "check", required: true },
+                { key: "tank_psi", label: "Tank test pressure held (PSI)", kind: "measurement", unit: "PSI", required: true },
+                { key: "water", label: "Water in tank bottom (inches)", kind: "measurement", unit: "in", required: true },
+                { key: "sump", label: "Containment sumps dry & sensors functional", kind: "check", required: true },
+                { key: "photo", label: "Photo of dispenser sump + ATG console", kind: "photo", required: true },
+                { key: "note", label: "Deficiencies / repairs", kind: "note", required: false },
+              ],
+            },
+            {
+              name: "Weights & Measures Dispenser Calibration",
+              description: "Volume accuracy verification per NIST Handbook 44 (±6 in³ per 5 gal).",
+              issuesCertification: "W&M Calibration Seal",
+              certValidityDays: 365,
+              steps: [
+                { key: "prover", label: "5-gallon prover used, temperature-corrected", kind: "check", required: true },
+                { key: "grade1", label: "Grade 1 delivered volume error (in³)", kind: "measurement", unit: "in³", required: true },
+                { key: "grade2", label: "Grade 2 delivered volume error (in³)", kind: "measurement", unit: "in³", required: true },
+                { key: "seal", label: "Calibration seal applied & serial recorded", kind: "note", required: true },
+                { key: "photo", label: "Photo of sealed dispenser head", kind: "photo", required: true },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        key: "aa_field_ops",
+        name: "AA Field-Ops",
+        description: "American Automators dogfood: Acorn tiers + on-prem installs.",
+        config: {
+          jobTypes: ["Site Survey", "Acorn Starter Install", "Acorn Pro Install", "Acorn Enterprise Install", "On-Prem Hardware Service", "Network Commissioning"],
+          equipmentKinds: ["On-Prem AI Server", "Network Appliance", "UPS"],
+          certTypes: ["Acorn Certified Installer", "Network+ "],
+          inspectionTemplates: [
+            {
+              name: "Acorn On-Prem Install Checklist",
+              description: "Commissioning checklist for on-prem hardware installs.",
+              steps: [
+                { key: "rack", label: "Rack mounted & secured", kind: "check", required: true },
+                { key: "power", label: "Dual power feeds connected (UPS verified)", kind: "check", required: true },
+                { key: "serial", label: "Chassis serial recorded", kind: "note", required: true },
+                { key: "network", label: "Network link negotiated (Gbps)", kind: "measurement", unit: "Gbps", required: true },
+                { key: "handoff", label: "Customer walkthrough completed", kind: "check", required: true },
+              ],
+            },
+          ],
+        },
+      },
     ])
     .returning();
   const packByKey = Object.fromEntries(packs.map((p) => [p.key, p]));
@@ -825,13 +930,84 @@ async function main() {
     { provider: "ORGMEMORY", status: "DISCONNECTED" },
   ]);
 
-  console.log("✅ Seed complete (3 orgs).");
+  // ── Org D: Mascott Fuel Services (fuel_equipment vertical — pack proof) ─────
+  // The Fuel Equipment pack, enabled + provisioned. Proves a complex non-plumbing
+  // vertical runs on the same core with pack-provided templates/equipment/certs
+  // and zero plumbing/insurance leakage. Kevin/Mascott is the live design partner.
+  const [mascottOrg] = await db
+    .insert(t.organizations)
+    .values([{ name: "Mascott Fuel Services", slug: "mascott-fuel", brandPrimary: "#0057FF" }])
+    .returning();
+  await setOrg(mascottOrg.id);
+  console.log("Mascott Fuel Services (org D)…");
+  await db.insert(t.organizationTradePacks).values([
+    { organizationId: mascottOrg.id, tradePackId: packByKey["fuel_equipment"].id },
+  ]);
+  const [fuelAdmin, , fuelTech] = await db
+    .insert(t.users)
+    .values([
+      { email: "owner@mascottfuel.demo", name: "Kevin Mascott", role: "ADMIN", passwordHash: hash, phone: "555-0500" },
+      { email: "office@mascottfuel.demo", name: "Rita Salas", role: "OFFICE", passwordHash: hash, phone: "555-0501" },
+      { email: "tech@mascottfuel.demo", name: "Ray Okonkwo", role: "TECH", passwordHash: hash, phone: "555-0502" },
+    ])
+    .returning();
+  const [fuelCust] = await db
+    .insert(t.customers)
+    .values([{ name: "QuikTrip #412", type: "COMMERCIAL", company: "QuikTrip Corp", email: "site412@quiktrip.demo", phone: "555-0600", notes: "6 MPDs, 3 USTs (regular/mid/premium). Class B operator on site." }])
+    .returning();
+  const [fuelProp] = await db
+    .insert(t.properties)
+    .values([{ customerId: fuelCust.id, label: "QuikTrip #412 — forecourt", address: "4500 S Memorial Dr", city: "Tulsa", state: "OK", zip: "74145", accessNotes: "Check in with store manager; hot-work permit required for dispenser work" }])
+    .returning();
+  const [tank1] = await db
+    .insert(t.equipment)
+    .values([
+      { propertyId: fuelProp.id, kind: "Underground Storage Tank (UST)", brand: "Containment Solutions", model: "DW-12000", serial: "UST-412-A", installedAt: daysFromNow(-2600), notes: "12,000 gal double-wall, regular unleaded" },
+      { propertyId: fuelProp.id, kind: "Fuel Dispenser", brand: "Gilbarco", model: "Encore 700S", serial: "MPD-412-03", installedAt: daysFromNow(-1200), notes: "MPD #3 — W&M seal due" },
+      { propertyId: fuelProp.id, kind: "Cardlock System", brand: "OPW", model: "FMS", serial: "CL-412", installedAt: daysFromNow(-800) },
+    ])
+    .returning();
+  await db.insert(t.priceBookItems).values([
+    { code: "UST-TEST", name: "UST Annual Tightness Test (per tank)", category: "Fuel Equipment", unitCostCents: $(60), unitPriceCents: $(385), laborHours: 2 },
+    { code: "WM-CAL", name: "Weights & Measures Dispenser Calibration (per MPD)", category: "Fuel Equipment", unitCostCents: $(20), unitPriceCents: $(240), laborHours: 1.5 },
+    { code: "DISP-SVC", name: "Dispenser Service Call", category: "Fuel Equipment", unitCostCents: $(15), unitPriceCents: $(195), laborHours: 1 },
+  ]);
+  await db.insert(t.jobs).values([
+    { number: "MF-3001", status: "SCHEDULED", priority: "HIGH", jobType: "UST Tank Test", customerId: fuelCust.id, propertyId: fuelProp.id, assignedToId: fuelTech.id, scheduledAt: daysFromNow(0, 8), description: "Annual tightness test — all 3 USTs. Compliance deadline this month." },
+    { number: "MF-3002", status: "SCHEDULED", priority: "NORMAL", jobType: "Dispenser Calibration", customerId: fuelCust.id, propertyId: fuelProp.id, assignedToId: fuelTech.id, scheduledAt: daysFromNow(1, 10), description: "W&M recalibration MPD #3 — seal expired." },
+  ]);
+  // Provision the pack's inspection templates (what the Trade Packs UI does).
+  const fuelCfg = (packByKey["fuel_equipment"].config ?? {}) as { inspectionTemplates?: Array<{ name: string; description?: string; issuesCertification?: string; certValidityDays?: number; steps: unknown }> };
+  await db.insert(t.inspectionTemplates).values(
+    (fuelCfg.inspectionTemplates ?? []).map((tpl) => ({
+      name: tpl.name,
+      tradePackKey: "fuel_equipment",
+      description: tpl.description ?? null,
+      steps: tpl.steps,
+      issuesCertification: tpl.issuesCertification ?? null,
+      certValidityDays: tpl.certValidityDays ?? null,
+    }))
+  );
+  await db.insert(t.certifications).values([
+    { name: "UST Operator Class B", holderType: "USER", userId: fuelTech.id, certificateNumber: "USTB-4471", issuingAuthority: "OK Corporation Commission", issuedAt: daysFromNow(-500), expiresAt: daysFromNow(40) },
+    { name: "Weights & Measures Registered Technician", holderType: "USER", userId: fuelTech.id, certificateNumber: "WM-2231", issuingAuthority: "OK Dept. of Agriculture", issuedAt: daysFromNow(-300), expiresAt: daysFromNow(120) },
+    { name: "UST Tightness Test Certificate", holderType: "EQUIPMENT", equipmentId: tank1.id, certificateNumber: "TT-412-A-25", issuingAuthority: "Mascott Fuel Services", issuedAt: daysFromNow(-360), expiresAt: daysFromNow(5), notes: "Tank A — retest due this week" },
+  ]);
+  await db.insert(t.kbArticles).values([
+    { slug: "ust-test-sop", title: "SOP: UST Annual Tightness Test", category: "SOP", tags: ["ust", "compliance", "epa"], authorId: fuelAdmin.id, verifiedAt: daysFromNow(-20), body: "## UST tightness test\n1. Pull ATG alarm history; note any theft/leak alarms\n2. Trip-test each line leak detector at 3 gph\n3. Pressure/vacuum test tank; record hold\n4. Gauge water bottoms; <2\" acceptable\n5. Verify sump sensors; sumps dry\n6. File cert + upload to state UST portal" },
+    { slug: "hot-work-fuel", title: "SAFETY: Hot Work in Fuel Environments", category: "SAFETY", tags: ["safety", "hot work", "vapor"], authorId: fuelAdmin.id, body: "Never open a dispenser under power. LOTO the MPD, verify zero vapor with a calibrated meter, keep extinguisher within reach, and pull the site hot-work permit before any grinding/soldering." },
+  ]);
+  await db.insert(t.integrationConnections).values([{ provider: "ORGMEMORY", status: "DISCONNECTED" }]);
+
+  console.log("✅ Seed complete (4 orgs).");
   console.log("Apex Plumbing (org A) — password demo1234:");
   console.log("  owner@apexplumbing.demo · office@ · sales@ · tech@");
   console.log("Summit HVAC (org B) — password demo1234:");
   console.log("  owner@summithvac.demo · tech@summithvac.demo");
   console.log("American Automators (org C) — password demo1234:");
   console.log("  owner@americanautomators.demo · sales@ · tech@");
+  console.log("Mascott Fuel Services (org D) — password demo1234:");
+  console.log("  owner@mascottfuel.demo · office@ · tech@");
   await client.end();
   process.exit(0);
 }

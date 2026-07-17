@@ -32,6 +32,8 @@ import {
   testConnector,
 } from "@/lib/actions/connectors";
 import { configureSso, disableSso } from "@/lib/actions/sso";
+import { enablePack, disablePack, provisionPackTemplates } from "@/lib/actions/packs";
+import { packCatalog } from "@/lib/trade-packs";
 import { getConnector, listByCapability } from "@/lib/connectors/providers";
 import { CAPABILITY_LABELS, type Connector } from "@/lib/connectors/types";
 import {
@@ -55,11 +57,12 @@ import { money, timeAgo } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-const TABS = ["team", "integrations", "identity", "commissions", "audit", "company"] as const;
+const TABS = ["team", "packs", "integrations", "identity", "commissions", "audit", "company"] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
   team: "👥 Team",
+  packs: "🧩 Trade Packs",
   integrations: "🔌 Integrations",
   identity: "🔐 SSO / Identity",
   commissions: "💵 Commissions",
@@ -138,6 +141,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: { t
       {tab === "identity" ? <IdentityTab organizationId={session.organizationId} /> : null}
       {tab === "commissions" ? <CommissionsTab organizationId={session.organizationId} /> : null}
       {tab === "audit" ? <AuditTab organizationId={session.organizationId} /> : null}
+      {tab === "packs" ? <PacksTab organizationId={session.organizationId} /> : null}
       {tab === "company" ? <CompanyTab /> : null}
     </div>
   );
@@ -871,6 +875,112 @@ async function AuditTab({ organizationId }: { organizationId: string }) {
         )}
       </CardBody>
     </Card>
+  );
+}
+
+// ── Trade Packs ──────────────────────────────────────────────────────────────
+
+async function PacksTab({ organizationId }: { organizationId: string }) {
+  const packs = await packCatalog(organizationId);
+  const enabled = packs.filter((p) => p.enabled);
+  const available = packs.filter((p) => !p.enabled);
+
+  // How many of each enabled pack's templates are already provisioned?
+  const provisioned = await withTenant(organizationId, (tx) =>
+    tx.select({ name: t.inspectionTemplates.name }).from(t.inspectionTemplates)
+  );
+  const provisionedNames = new Set(provisioned.map((p) => p.name));
+
+  const ProvidesRow = ({ label, items }: { label: string; items: string[] }) =>
+    items.length ? (
+      <div className="mt-2">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+        <div className="mt-1 flex flex-wrap gap-1">
+          {items.map((i) => (
+            <span key={i} className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">{i}</span>
+          ))}
+        </div>
+      </div>
+    ) : null;
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-blue-200 bg-blue-50/50">
+        <CardBody className="text-sm text-slate-700">
+          🧩 One core, many packs. A pack composes this tenant&apos;s job types, equipment kinds, inspection
+          templates, and certifications — all data-driven, no per-trade forks. Enabling multiple packs is
+          supported (e.g. plumbing + sewer). Enabled: <b>{enabled.map((p) => p.name).join(", ") || "none"}</b>.
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader title="Enabled packs" subtitle={`${enabled.length} active`} />
+        <CardBody className="space-y-3">
+          {enabled.length === 0 ? (
+            <EmptyState title="No packs enabled" hint="Enable one below to compose this tenant's capabilities." />
+          ) : (
+            enabled.map((p) => {
+              const total = p.inspectionTemplates.length;
+              const have = p.inspectionTemplates.filter((tpl) => provisionedNames.has(tpl.name)).length;
+              return (
+                <div key={p.id} className="rounded-lg border border-slate-200 p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-slate-900">{p.name}</span>
+                        <Badge tone="green">enabled</Badge>
+                        <code className="text-[11px] text-slate-400">{p.key}</code>
+                      </div>
+                      {p.description ? <p className="mt-0.5 text-xs text-slate-500">{p.description}</p> : null}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {total > 0 ? (
+                        <form action={provisionPackTemplates}>
+                          <input type="hidden" name="packId" value={p.id} />
+                          <Button size="sm" variant={have < total ? "primary" : "secondary"} type="submit">
+                            {have < total ? `Provision templates (${have}/${total})` : `Templates ✓ ${have}/${total}`}
+                          </Button>
+                        </form>
+                      ) : null}
+                      <form action={disablePack}>
+                        <input type="hidden" name="packId" value={p.id} />
+                        <Button size="sm" variant="ghost" type="submit">Disable</Button>
+                      </form>
+                    </div>
+                  </div>
+                  <ProvidesRow label="Job types" items={p.jobTypes} />
+                  <ProvidesRow label="Equipment kinds" items={p.equipmentKinds} />
+                  <ProvidesRow label="Inspection templates" items={p.inspectionTemplates.map((tpl) => tpl.name)} />
+                  <ProvidesRow label="Certifications" items={p.certTypes} />
+                  <ProvidesRow label="Safety docs" items={p.safetyDocs} />
+                </div>
+              );
+            })
+          )}
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader title="Available packs" subtitle={`${available.length} in the catalog`} />
+        <CardBody className="grid gap-3 md:grid-cols-2">
+          {available.map((p) => (
+            <div key={p.id} className="rounded-lg border border-slate-200 p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="font-semibold text-slate-900">{p.name}</div>
+                  {p.description ? <p className="mt-0.5 text-xs text-slate-500">{p.description}</p> : null}
+                </div>
+                <form action={enablePack}>
+                  <input type="hidden" name="packId" value={p.id} />
+                  <Button size="sm" type="submit">Enable</Button>
+                </form>
+              </div>
+              <ProvidesRow label="Job types" items={p.jobTypes.slice(0, 6)} />
+            </div>
+          ))}
+        </CardBody>
+      </Card>
+    </div>
   );
 }
 

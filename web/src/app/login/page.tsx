@@ -10,7 +10,8 @@ const DEMO_ACCOUNTS: { email: string; role: Role; org: string }[] = [
   { email: "sales@apexplumbing.demo", role: "SALES_PM", org: "Apex Plumbing" },
   { email: "tech@apexplumbing.demo", role: "TECH", org: "Apex Plumbing" },
   { email: "owner@summithvac.demo", role: "ADMIN", org: "Summit HVAC" },
-  { email: "tech@summithvac.demo", role: "TECH", org: "Summit HVAC" },
+  { email: "owner@americanautomators.demo", role: "ADMIN", org: "American Automators" },
+  { email: "owner@mascottfuel.demo", role: "ADMIN", org: "Mascott Fuel Services" },
 ];
 
 async function login(formData: FormData) {

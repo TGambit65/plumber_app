@@ -179,10 +179,35 @@ conversion completes:
     Verified: config persists and the per-org entry builds a correct OIDC
     authorize URL to the tenant IdP.
 
-## Status: Phases 0–4 complete
+## Status: Phases 0–4 complete + Fuel Equipment vertical
 
-The Trade-Ops core now satisfies all 12 ratified constraints. Three seeded
-tenants (Apex Plumbing, Summit HVAC, American Automators) demonstrate
-composition + isolation. Next work is depth per pillar (real IdP wiring,
-supplier punchout, more native connectors, photo pipeline, PWA service worker)
-and additional trade packs (fuel equipment from the Kevin's-App harvest).
+The Trade-Ops core satisfies all 12 ratified constraints. **Trade packs are now
+first-class and self-service**, proving "one core, many packs" at depth:
+
+- **Rich pack config**: `tradePacks.config` carries `jobTypes`,
+  `equipmentKinds`, `certTypes`, `safetyDocs`, and `inspectionTemplates` — all
+  data-driven; the core schema stays trade-neutral (no fuel enums, no plumbing
+  assumptions). Helpers in `src/lib/trade-packs.ts` compose these from the org's
+  ENABLED packs only.
+- **Pack management + provisioning** (`src/lib/actions/packs.ts`, Settings →
+  Trade Packs): admins enable/disable packs live and **provision** a pack's
+  inspection templates into the tenant (idempotent, audited). Verified: enabling
+  Fuel Equipment on Summit added it live, provisioning created its 2 templates,
+  re-provisioning was a no-op.
+- **Fuel Equipment vertical** (Kevin's-App harvest target): the `fuel_equipment`
+  pack ships 8 job types, 7 equipment kinds (UST/AST/dispenser/cardlock/lube…),
+  2 compliance templates (UST Annual Tightness Test → cert; Weights & Measures
+  Dispenser Calibration → seal), 5 cert types, and safety docs. Seeded
+  **Mascott Fuel Services** tenant (QuikTrip site, 3 USTs + dispensers +
+  cardlock, UST/W&M jobs, Class B operator cert expiring, provisioned
+  templates). Verified: Mascott sees ONLY fuel job types (zero plumbing
+  leakage); Apex never sees fuel types or Mascott data.
+
+Four seeded tenants now demonstrate composition + isolation: Apex Plumbing
+(plumbing+sewer), Summit HVAC (hvac+plumbing), American Automators
+(aa_field_ops), Mascott Fuel Services (fuel_equipment).
+
+Remaining depth: real IdP/OIDC signature verification, supplier punchout, live
+connector implementations beyond Odoo, photo binary pipeline + PWA service
+worker, and the fuel domain's richer equipment records (dispenser/tank
+sub-attributes) as pack-scoped custom fields.
