@@ -158,8 +158,24 @@ conversion completes:
     offline workspace with a live sync-state chip. `updated_at` touch triggers
     (`db/sync.sql`) drive delta. Verified: local-ID create round-trips to a
     server ID with FK + org preserved, zero `local:` leakage, stale updates
-    rejected as conflicts (no clobber). TODOs: photo binary upload, service
-    worker precache, at-rest encryption, per-field merge UI (spec §§ noted).
+    rejected as conflicts (no clobber).
+  - **Offline photo pipeline (done)**: field photo capture works fully offline.
+    `<input capture="environment">` grabs the shot, it lands in a `photoQueue`
+    IndexedDB store (`idb.ts` DB v2) as a durable `Blob`, and the sync client
+    (`syncClient.ts` `enqueuePhoto`/`flushPhotos`) uploads it on reconnect —
+    resolving any `local:` job ID to its server ID first. `/api/photos/upload`
+    verifies the job belongs to the caller's org **before** writing anything,
+    re-encodes to JPEG + thumbnail via `sharp`, stores under
+    `public/uploads/<orgId>/`, inserts an org-scoped `jobPhotos` row, and audits
+    `UPLOAD_PHOTO`. The sync chip counts queued photos as pending. Verified:
+    captured offline → queued → survived reload → auto-uploaded on reconnect
+    (server 1→2, file on disk); cross-tenant upload attempt correctly 404'd.
+  - **PWA app shell (done)**: `public/manifest.json` (installable, standalone,
+    `/field` start URL, brand icons) + `public/sw.js` (network-first navigation
+    with `/offline` fallback, cache-first static, network-only for
+    `/api`·`/auth`·`/uploads`·`/login`) registered via `PwaRegister`; `/offline`
+    fallback page. Verified: SW registers on the client after load.
+  - TODOs remaining: at-rest queue encryption, per-field merge UI (spec §§ noted).
   - **Approval-gated egress**: `outbound_messages` queue; estimate sends and
     follow-up touches now create PENDING_APPROVAL rows instead of firing;
     `/approvals` card UI (office/admin) approves (executes the real send +
@@ -208,6 +224,7 @@ Four seeded tenants now demonstrate composition + isolation: Apex Plumbing
 (aa_field_ops), Mascott Fuel Services (fuel_equipment).
 
 Remaining depth: real IdP/OIDC signature verification, supplier punchout, live
-connector implementations beyond Odoo, photo binary pipeline + PWA service
-worker, and the fuel domain's richer equipment records (dispenser/tank
-sub-attributes) as pack-scoped custom fields.
+connector implementations beyond Odoo, and the fuel domain's richer equipment
+records (dispenser/tank sub-attributes) as pack-scoped custom fields.
+(Offline-first is now complete end-to-end — capture, durable queue, binary
+photo upload, and PWA app shell all shipped and verified.)

@@ -18,10 +18,12 @@ import { idbGetAll } from "@/lib/offline/idb";
 import { loadIdMap, newLocalId } from "@/lib/offline/localId";
 import {
   enqueue,
+  enqueuePhoto,
   runInitialSync,
   startSyncListeners,
   syncNow,
   emitState,
+  type QueuedPhoto,
 } from "@/lib/offline/syncClient";
 
 // ── Cached shapes (loosely typed — IDB rows are JSON) ─────────────────────────
@@ -414,6 +416,9 @@ function JobDetail({
         </CardBody>
       </Card>
 
+      {/* Photos — capture works offline; uploads drain on reconnect */}
+      <JobPhotos jobId={job.id} />
+
       {/* Notes */}
       <Card>
         <CardBody className="space-y-3">
@@ -439,5 +444,113 @@ function JobDetail({
         Every action saves to this device first, then syncs automatically.
       </p>
     </div>
+  );
+}
+
+const PHOTO_KINDS: QueuedPhoto["kind"][] = ["BEFORE", "DURING", "AFTER", "PROBLEM", "COVERUP"];
+
+/**
+ * Offline photo capture for a job. Photos are queued in IndexedDB (durable) and
+ * upload automatically when back online. Queued blobs preview via object URLs.
+ */
+function JobPhotos({ jobId }: { jobId: string }) {
+  const [queued, setQueued] = useState<QueuedPhoto[]>([]);
+  const [kind, setKind] = useState<QueuedPhoto["kind"]>("AFTER");
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const all = await idbGetAll<QueuedPhoto>("photoQueue");
+      setQueued(all.filter((p) => p.jobId === jobId));
+    } catch {
+      /* IDB unavailable — no-op */
+    }
+  }, [jobId]);
+
+  useEffect(() => {
+    void refresh();
+    const onSync = () => void refresh();
+    window.addEventListener("tradeops-sync", onSync as EventListener);
+    return () => window.removeEventListener("tradeops-sync", onSync as EventListener);
+  }, [refresh]);
+
+  const onPick = useCallback(
+    async (file: File | undefined) => {
+      if (!file) return;
+      setBusy(true);
+      try {
+        await enqueuePhoto({ jobId, kind, blob: file });
+        await refresh();
+      } finally {
+        setBusy(false);
+      }
+    },
+    [jobId, kind, refresh]
+  );
+
+  return (
+    <Card>
+      <CardBody className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-semibold text-slate-700">Photos</div>
+          {queued.length > 0 ? <Badge tone="amber">{queued.length} queued</Badge> : null}
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {PHOTO_KINDS.map((k) => (
+            <button
+              key={k}
+              onClick={() => setKind(k)}
+              className={
+                "rounded-full px-3 py-1 text-xs font-medium " +
+                (kind === k ? "bg-brand-blue text-white" : "bg-slate-100 text-slate-600")
+              }
+            >
+              {statusLabel(k)}
+            </button>
+          ))}
+        </div>
+
+        {/* Native capture — opens the camera on phones. */}
+        <label className={buttonClass("primary", "lg", "w-full cursor-pointer")}>
+          {busy ? "Saving…" : `📷 Capture ${statusLabel(kind)} photo`}
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            disabled={busy}
+            onChange={(e) => onPick(e.target.files?.[0])}
+          />
+        </label>
+
+        {queued.length > 0 ? (
+          <>
+            <div className="grid grid-cols-3 gap-2">
+              {queued.map((p) => (
+                <div key={p.id} className="relative">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={URL.createObjectURL(p.blob)}
+                    alt={p.kind}
+                    className="h-24 w-full rounded-lg object-cover"
+                  />
+                  <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[9px] font-medium text-white">
+                    {p.kind}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="text-center text-[11px] text-amber-600">
+              ⏳ Queued on this device — uploads when you&apos;re back online.
+            </p>
+          </>
+        ) : (
+          <p className="text-center text-[11px] text-slate-400">
+            Captured photos attach to this job and upload automatically.
+          </p>
+        )}
+      </CardBody>
+    </Card>
   );
 }

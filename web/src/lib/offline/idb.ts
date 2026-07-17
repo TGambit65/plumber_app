@@ -11,11 +11,11 @@
  */
 
 export const DB_NAME = "tradeops-offline";
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
-export type StoreName = "jobs" | "timeEntries" | "jobForms" | "syncQueue" | "meta";
+export type StoreName = "jobs" | "timeEntries" | "jobForms" | "syncQueue" | "photoQueue" | "meta";
 
-const ENTITY_STORES: StoreName[] = ["jobs", "timeEntries", "jobForms", "syncQueue"];
+const ENTITY_STORES: StoreName[] = ["jobs", "timeEntries", "jobForms", "syncQueue", "photoQueue"];
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 

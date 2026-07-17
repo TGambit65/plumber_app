@@ -59,9 +59,20 @@ export interface PushResultRow {
 export interface SyncState {
   online: boolean;
   inFlight: boolean;
-  pending: number;
+  pending: number; // queued data mutations
+  pendingPhotos: number; // queued photo captures awaiting upload
   lastError: string | null;
   lastSync: string | null;
+}
+
+/** A photo captured in the field, queued in IDB until it can be uploaded. */
+export interface QueuedPhoto {
+  id: string;
+  jobId: string;
+  kind: "BEFORE" | "DURING" | "AFTER" | "PROBLEM" | "COVERUP";
+  caption?: string;
+  blob: Blob;
+  capturedAt: string;
 }
 
 export interface FlushSummary {
@@ -95,14 +106,16 @@ function uuid(): string {
 
 /** Broadcast current sync state so UI chips can react. Safe on the server (no-op). */
 export async function emitState(): Promise<SyncState> {
-  const [pending, lastSync] = await Promise.all([
+  const [pending, pendingPhotos, lastSync] = await Promise.all([
     idbCount("syncQueue").catch(() => 0),
+    idbCount("photoQueue").catch(() => 0),
     getMeta<string>(LAST_SYNC_KEY).catch(() => undefined),
   ]);
   const state: SyncState = {
     online: isOnline(),
     inFlight,
     pending,
+    pendingPhotos,
     lastError,
     lastSync: lastSync ?? null,
   };
@@ -110,6 +123,61 @@ export async function emitState(): Promise<SyncState> {
     window.dispatchEvent(new CustomEvent<SyncState>(SYNC_EVENT, { detail: state }));
   }
   return state;
+}
+
+// ── Photo capture queue (spec §5) ─────────────────────────────────────────────
+
+/**
+ * Queue a captured photo locally. It uploads immediately if online, otherwise
+ * it waits in IndexedDB (durable) and drains on reconnect via flushPhotos().
+ * Local-ID remap: if jobId is still a `local:` id, it's resolved at upload time.
+ */
+export async function enqueuePhoto(input: {
+  jobId: string;
+  kind: QueuedPhoto["kind"];
+  caption?: string;
+  blob: Blob;
+}): Promise<QueuedPhoto> {
+  const photo: QueuedPhoto = {
+    id: uuid(),
+    jobId: input.jobId,
+    kind: input.kind,
+    caption: input.caption,
+    blob: input.blob,
+    capturedAt: new Date().toISOString(),
+  };
+  await idbPut("photoQueue", photo);
+  await emitState();
+  if (isOnline()) void flushPhotos();
+  return photo;
+}
+
+/** Upload every queued photo. Successful uploads are removed from the queue. */
+export async function flushPhotos(): Promise<{ uploaded: number; errors: number }> {
+  const result = { uploaded: 0, errors: 0 };
+  if (!isOnline()) return result;
+  const queued = await idbGetAll<QueuedPhoto>("photoQueue");
+  for (const p of queued) {
+    try {
+      const jobId = resolveId(p.jobId); // handle local:→server FK remap
+      if (isLocalId(jobId)) continue; // job not synced yet; try again next flush
+      const fd = new FormData();
+      fd.set("file", p.blob, `${p.id}.jpg`);
+      fd.set("jobId", jobId);
+      fd.set("kind", p.kind);
+      if (p.caption) fd.set("caption", p.caption);
+      fd.set("localId", p.id);
+      const res = await fetch("/api/photos/upload", { method: "POST", body: fd });
+      if (!res.ok) throw new Error(`upload ${res.status}`);
+      await idbDelete("photoQueue", p.id);
+      result.uploaded++;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      result.errors++;
+    }
+  }
+  await emitState();
+  return result;
 }
 
 export async function getSyncState(): Promise<SyncState> {
@@ -365,16 +433,21 @@ export function startSyncListeners(): void {
   if (listenersWired || typeof window === "undefined") return;
   listenersWired = true;
   window.addEventListener("online", () => {
-    void emitState().then(() => flushQueue());
+    // Data mutations first (so photos can remap local job ids to server ids),
+    // then queued photos.
+    void emitState()
+      .then(() => flushQueue())
+      .then(() => flushPhotos());
   });
   window.addEventListener("offline", () => {
     void emitState();
   });
 }
 
-/** Convenience for the "Sync now" button: drain the queue, then pull deltas. */
+/** Convenience for the "Sync now" button: drain queues, then pull deltas. */
 export async function syncNow(): Promise<void> {
   await flushQueue();
+  await flushPhotos();
   if (isOnline()) await runDeltaSync();
 }
 

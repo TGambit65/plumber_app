@@ -19,7 +19,9 @@ export function SyncChip({ className }: { className?: string }) {
   }, []);
 
   const online = state?.online ?? (typeof navigator !== "undefined" ? navigator.onLine : true);
-  const pending = state?.pending ?? 0;
+  // A photo capture is a pending item too — count both so nothing looks "synced"
+  // while a photo is still queued for upload.
+  const pending = (state?.pending ?? 0) + (state?.pendingPhotos ?? 0);
   const inFlight = state?.inFlight ?? false;
 
   let tone: string;
