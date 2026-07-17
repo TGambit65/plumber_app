@@ -1,4 +1,9 @@
 import type { Metadata, Viewport } from "next";
+// Self-hosted brand fonts (same-origin → cached by the service worker, works
+// offline). Variable fonts; subsets are unicode-range gated so only latin is
+// fetched for the English UI. Replaces the external Google Fonts CDN link.
+import "@fontsource-variable/inter/index.css";
+import "@fontsource-variable/montserrat/index.css";
 import "./globals.css";
 import { PwaRegister } from "@/components/pwa-register";
 
@@ -19,12 +24,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Montserrat:wght@600;700;800&display=swap"
-          rel="stylesheet"
-        />
         <link rel="apple-touch-icon" href="/icon-192.png" />
       </head>
       <body className="min-h-screen bg-slate-100 font-sans text-slate-900 antialiased">
