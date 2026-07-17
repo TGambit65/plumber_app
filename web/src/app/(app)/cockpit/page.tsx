@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -20,25 +20,29 @@ export default async function CockpitPage() {
   endOfToday.setHours(23, 59, 59, 999);
   const period = new Date().toISOString().slice(0, 7);
 
-  const [followUpsDue, hotEstimates, myLeads, commissions] = await Promise.all([
-    db.query.followUps.findMany({
-      where: and(eq(t.followUps.status, "PENDING"), lte(t.followUps.dueAt, endOfToday)),
-      with: { lead: true, estimate: { with: { customer: true } } },
-      orderBy: [t.followUps.dueAt],
-    }),
-    db.query.estimates.findMany({
-      where: and(gte(t.estimates.viewCount, 2), inArray(t.estimates.status, ["SENT", "VIEWED"])),
-      with: { customer: true },
-      orderBy: [desc(t.estimates.lastViewedAt)],
-    }),
-    db.query.leads.findMany({
-      where: eq(t.leads.assignedToId, session.userId),
-    }),
-    db.query.commissionEntries.findMany({
-      where: and(eq(t.commissionEntries.userId, session.userId), eq(t.commissionEntries.period, period)),
-      orderBy: [desc(t.commissionEntries.createdAt)],
-    }),
-  ]);
+  const [followUpsDue, hotEstimates, myLeads, commissions] = await withTenant(
+    session.organizationId,
+    (tx) =>
+      Promise.all([
+        tx.query.followUps.findMany({
+          where: and(eq(t.followUps.status, "PENDING"), lte(t.followUps.dueAt, endOfToday)),
+          with: { lead: true, estimate: { with: { customer: true } } },
+          orderBy: [t.followUps.dueAt],
+        }),
+        tx.query.estimates.findMany({
+          where: and(gte(t.estimates.viewCount, 2), inArray(t.estimates.status, ["SENT", "VIEWED"])),
+          with: { customer: true },
+          orderBy: [desc(t.estimates.lastViewedAt)],
+        }),
+        tx.query.leads.findMany({
+          where: eq(t.leads.assignedToId, session.userId),
+        }),
+        tx.query.commissionEntries.findMany({
+          where: and(eq(t.commissionEntries.userId, session.userId), eq(t.commissionEntries.period, period)),
+          orderBy: [desc(t.commissionEntries.createdAt)],
+        }),
+      ])
+  );
 
   // Follow-ups relevant to me (my leads or my estimates)
   const myFollowUps = followUpsDue.filter(

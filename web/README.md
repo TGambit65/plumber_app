@@ -46,10 +46,11 @@ Two tenants are seeded to demonstrate isolation (see Multi-tenancy below):
 This app is the multi-tenant **Trade-Ops** core (see
 [`../docs/strategy/architecture.md`](../docs/strategy/architecture.md)). Every
 tenant-owned row carries `organization_id`; isolation is enforced by Postgres
-**RLS** via the `withTenant(orgId, …)` primitive. RLS is enabled table-by-table
-as each module is converted — currently ON for `kb_articles` (verified: Summit
-cannot see Apex's SOPs, and vice-versa). Run `npm run db:rls` to (re)apply
-policies after `npm run db:seed`.
+**FORCE RLS on all 41 tenant tables** via the `withTenant(orgId, …)` primitive
+(login uses the `auth_user_by_email()` SECURITY DEFINER bootstrap). Verified
+end-to-end: neither org can see the other's customers, jobs, invoices, price
+book, messages, team, SOPs, or search results, and unscoped connections read
+zero rows. Run `npm run db:rls` (as a superuser) after `npm run db:seed`.
 
 ## What's implemented
 

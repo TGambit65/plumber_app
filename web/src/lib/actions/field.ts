@@ -1,6 +1,6 @@
 "use server";
 
-import { db, t } from "@/db";
+import { t, withTenant, type TenantDb } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { audit, logActivity, notify } from "./helpers";
@@ -24,8 +24,8 @@ function str(formData: FormData, key: string): string {
   return String(formData.get(key) ?? "").trim();
 }
 
-async function getJobOrThrow(jobId: string) {
-  const job = await db.query.jobs.findFirst({
+async function getJobOrThrow(tx: TenantDb, jobId: string) {
+  const job = await tx.query.jobs.findFirst({
     where: eq(t.jobs.id, jobId),
     with: { customer: true, property: true },
   });
@@ -33,8 +33,8 @@ async function getJobOrThrow(jobId: string) {
   return job;
 }
 
-async function usersByRole(role: "TECH" | "SALES_PM" | "OFFICE" | "ADMIN") {
-  return db.select().from(t.users).where(and(eq(t.users.role, role), eq(t.users.active, true)));
+async function usersByRole(tx: TenantDb, role: "TECH" | "SALES_PM" | "OFFICE" | "ADMIN") {
+  return tx.select().from(t.users).where(and(eq(t.users.role, role), eq(t.users.active, true)));
 }
 
 /** Simple canned AI summary per job type (demo of voice-note → AI summary). */
@@ -70,15 +70,50 @@ export async function advanceJobStatus(formData: FormData) {
 
   const jobId = str(formData, "jobId");
   const to = str(formData, "to") as JobStatus;
-  const job = await getJobOrThrow(jobId);
 
-  const fromIdx = STATUS_FLOW.indexOf(job.status);
-  const toIdx = STATUS_FLOW.indexOf(to);
-  if (toIdx === -1 || fromIdx === -1) throw new Error(`Cannot advance from ${job.status}`);
-  if (toIdx !== fromIdx + 1) throw new Error(`Invalid transition ${job.status} → ${to} (no skipping states)`);
-  if (to === "COMPLETED") throw new Error("Completion goes through the closeout flow");
+  const job = await withTenant(session.organizationId, async (tx) => {
+    const job = await getJobOrThrow(tx, jobId);
 
-  await db.update(t.jobs).set({ status: to }).where(eq(t.jobs.id, jobId));
+    const fromIdx = STATUS_FLOW.indexOf(job.status);
+    const toIdx = STATUS_FLOW.indexOf(to);
+    if (toIdx === -1 || fromIdx === -1) throw new Error(`Cannot advance from ${job.status}`);
+    if (toIdx !== fromIdx + 1) throw new Error(`Invalid transition ${job.status} → ${to} (no skipping states)`);
+    if (to === "COMPLETED") throw new Error("Completion goes through the closeout flow");
+
+    await tx.update(t.jobs).set({ status: to }).where(eq(t.jobs.id, jobId));
+
+    if (to === "EN_ROUTE") {
+      // Travel clock starts
+      await tx.insert(t.timeEntries).values({
+        userId: session.userId,
+        jobId,
+        kind: "TRAVEL",
+        startedAt: new Date(),
+      });
+    }
+
+    if (to === "IN_PROGRESS") {
+      // Close any open travel entry for this job, then start the work clock
+      await tx
+        .update(t.timeEntries)
+        .set({ endedAt: new Date() })
+        .where(
+          and(
+            eq(t.timeEntries.userId, session.userId),
+            eq(t.timeEntries.jobId, jobId),
+            isNull(t.timeEntries.endedAt)
+          )
+        );
+      await tx.insert(t.timeEntries).values({
+        userId: session.userId,
+        jobId,
+        kind: "WORK",
+        startedAt: new Date(),
+      });
+    }
+
+    return job;
+  });
 
   await logActivity({
     kind: "STATUS",
@@ -89,39 +124,13 @@ export async function advanceJobStatus(formData: FormData) {
   });
 
   if (to === "EN_ROUTE") {
-    // Simulated auto-text to the customer + travel clock starts
+    // Simulated auto-text to the customer
     await logActivity({
       kind: "SMS",
       body: `On my way text sent to ${job.customer.name}`,
       userId: session.userId,
       jobId,
       customerId: job.customerId,
-    });
-    await db.insert(t.timeEntries).values({
-      userId: session.userId,
-      jobId,
-      kind: "TRAVEL",
-      startedAt: new Date(),
-    });
-  }
-
-  if (to === "IN_PROGRESS") {
-    // Close any open travel entry for this job, then start the work clock
-    await db
-      .update(t.timeEntries)
-      .set({ endedAt: new Date() })
-      .where(
-        and(
-          eq(t.timeEntries.userId, session.userId),
-          eq(t.timeEntries.jobId, jobId),
-          isNull(t.timeEntries.endedAt)
-        )
-      );
-    await db.insert(t.timeEntries).values({
-      userId: session.userId,
-      jobId,
-      kind: "WORK",
-      startedAt: new Date(),
     });
   }
 
@@ -137,9 +146,11 @@ export async function addJobPhoto(formData: FormData) {
   const kind = str(formData, "kind") as typeof t.jobPhotos.$inferSelect.kind;
   const caption = str(formData, "caption") || null;
   const url = str(formData, "url") || "/demo-photos/wh-before.svg";
-  await getJobOrThrow(jobId);
 
-  await db.insert(t.jobPhotos).values({ jobId, kind, url, caption, takenById: session.userId });
+  await withTenant(session.organizationId, async (tx) => {
+    await getJobOrThrow(tx, jobId);
+    await tx.insert(t.jobPhotos).values({ jobId, kind, url, caption, takenById: session.userId });
+  });
   revalidateJob(jobId);
 }
 
@@ -148,15 +159,17 @@ export async function quickAddPhoto(formData: FormData) {
   const session = await requireSession();
   const jobId = str(formData, "jobId");
   const kind = str(formData, "kind") as typeof t.jobPhotos.$inferSelect.kind;
-  await getJobOrThrow(jobId);
 
   const url = kind === "AFTER" ? "/demo-photos/wh-after.svg" : "/demo-photos/wh-before.svg";
-  await db.insert(t.jobPhotos).values({
-    jobId,
-    kind,
-    url,
-    caption: `${kind.charAt(0) + kind.slice(1).toLowerCase()} photo (field capture)`,
-    takenById: session.userId,
+  await withTenant(session.organizationId, async (tx) => {
+    await getJobOrThrow(tx, jobId);
+    await tx.insert(t.jobPhotos).values({
+      jobId,
+      kind,
+      url,
+      caption: `${kind.charAt(0) + kind.slice(1).toLowerCase()} photo (field capture)`,
+      takenById: session.userId,
+    });
   });
   revalidateJob(jobId);
 }
@@ -168,14 +181,18 @@ export async function completeJobForm(formData: FormData) {
   const formId = str(formData, "formId");
   const note = str(formData, "note");
 
-  const form = await db.query.jobForms.findFirst({ where: eq(t.jobForms.id, formId) });
-  if (!form) throw new Error("Form not found");
-  if (form.completedAt) return;
+  const form = await withTenant(session.organizationId, async (tx) => {
+    const form = await tx.query.jobForms.findFirst({ where: eq(t.jobForms.id, formId) });
+    if (!form) throw new Error("Form not found");
+    if (form.completedAt) return null;
 
-  await db
-    .update(t.jobForms)
-    .set({ completedAt: new Date(), data: { note: note || "Completed in field", completedBy: session.name } })
-    .where(eq(t.jobForms.id, formId));
+    await tx
+      .update(t.jobForms)
+      .set({ completedAt: new Date(), data: { note: note || "Completed in field", completedBy: session.name } })
+      .where(eq(t.jobForms.id, formId));
+    return form;
+  });
+  if (!form) return;
 
   await logActivity({
     kind: "NOTE",
@@ -193,35 +210,43 @@ export async function addMaterialUsage(formData: FormData) {
   const jobId = str(formData, "jobId");
   const priceBookItemId = str(formData, "priceBookItemId");
   const qty = Math.max(0.1, Number(str(formData, "qty") || "1"));
-  const job = await getJobOrThrow(jobId);
 
-  const item = await db.query.priceBookItems.findFirst({ where: eq(t.priceBookItems.id, priceBookItemId) });
-  if (!item) throw new Error("Price book item not found");
+  const { job, item, lowStock } = await withTenant(session.organizationId, async (tx) => {
+    const job = await getJobOrThrow(tx, jobId);
 
-  await db.insert(t.materialUsages).values({ jobId, priceBookItemId, qty });
+    const item = await tx.query.priceBookItems.findFirst({ where: eq(t.priceBookItems.id, priceBookItemId) });
+    if (!item) throw new Error("Price book item not found");
 
-  // Decrement the tech's truck stock if a matching stock row exists
-  const [truck] = await db
-    .select()
-    .from(t.inventoryLocations)
-    .where(eq(t.inventoryLocations.userId, session.userId));
-  if (truck) {
-    const [stock] = await db
+    await tx.insert(t.materialUsages).values({ jobId, priceBookItemId, qty });
+
+    // Decrement the tech's truck stock if a matching stock row exists
+    let lowStock: { newQty: number; minQty: number } | null = null;
+    const [truck] = await tx
       .select()
-      .from(t.stockLevels)
-      .where(and(eq(t.stockLevels.locationId, truck.id), eq(t.stockLevels.priceBookItemId, priceBookItemId)));
-    if (stock) {
-      const newQty = Math.max(0, stock.qtyOnHand - qty);
-      await db.update(t.stockLevels).set({ qtyOnHand: newQty }).where(eq(t.stockLevels.id, stock.id));
-      if (newQty < stock.minQty) {
-        await notify(
-          session.userId,
-          `Truck below min: ${item.name} (${newQty} of ${stock.minQty})`,
-          "Added to your replenishment list.",
-          "/inventory"
-        );
+      .from(t.inventoryLocations)
+      .where(eq(t.inventoryLocations.userId, session.userId));
+    if (truck) {
+      const [stock] = await tx
+        .select()
+        .from(t.stockLevels)
+        .where(and(eq(t.stockLevels.locationId, truck.id), eq(t.stockLevels.priceBookItemId, priceBookItemId)));
+      if (stock) {
+        const newQty = Math.max(0, stock.qtyOnHand - qty);
+        await tx.update(t.stockLevels).set({ qtyOnHand: newQty }).where(eq(t.stockLevels.id, stock.id));
+        if (newQty < stock.minQty) lowStock = { newQty, minQty: stock.minQty };
       }
     }
+
+    return { job, item, lowStock };
+  });
+
+  if (lowStock) {
+    await notify(
+      session.userId,
+      `Truck below min: ${item.name} (${lowStock.newQty} of ${lowStock.minQty})`,
+      "Added to your replenishment list.",
+      "/inventory"
+    );
   }
 
   await logActivity({
@@ -242,15 +267,17 @@ export async function createPartRequest(formData: FormData) {
   const qty = Math.max(1, Number(str(formData, "qty") || "1"));
   if (!description) throw new Error("Description required");
 
-  await db.insert(t.partRequests).values({
-    requestedById: session.userId,
-    jobId,
-    description,
-    qty,
-    status: "OPEN",
+  const office = await withTenant(session.organizationId, async (tx) => {
+    await tx.insert(t.partRequests).values({
+      requestedById: session.userId,
+      jobId,
+      description,
+      qty,
+      status: "OPEN",
+    });
+    return usersByRole(tx, "OFFICE");
   });
 
-  const office = await usersByRole("OFFICE");
   for (const u of office) {
     await notify(
       u.id,
@@ -282,28 +309,33 @@ export async function flagOpportunity(formData: FormData) {
   const description = str(formData, "description") || null;
   const estValue = Number(str(formData, "estValue") || "0");
   if (!title) throw new Error("Title required");
-  const job = await getJobOrThrow(jobId);
 
-  const [lead] = await db
-    .insert(t.leads)
-    .values({
-      source: "TECH_FLAGGED",
-      stage: "NEW",
-      title,
-      contactName: job.customer.name,
-      phone: job.customer.phone,
-      email: job.customer.email,
-      description,
-      estValueCents: estValue > 0 ? Math.round(estValue * 100) : null,
-      customerId: job.customerId,
-      propertyId: job.propertyId,
-      createdById: session.userId,
-      techFlagged: true,
-      spiffCents: 5000,
-    })
-    .returning();
+  const { job, lead, salesUsers } = await withTenant(session.organizationId, async (tx) => {
+    const job = await getJobOrThrow(tx, jobId);
 
-  const salesUsers = await usersByRole("SALES_PM");
+    const [lead] = await tx
+      .insert(t.leads)
+      .values({
+        source: "TECH_FLAGGED",
+        stage: "NEW",
+        title,
+        contactName: job.customer.name,
+        phone: job.customer.phone,
+        email: job.customer.email,
+        description,
+        estValueCents: estValue > 0 ? Math.round(estValue * 100) : null,
+        customerId: job.customerId,
+        propertyId: job.propertyId,
+        createdById: session.userId,
+        techFlagged: true,
+        spiffCents: 5000,
+      })
+      .returning();
+
+    const salesUsers = await usersByRole(tx, "SALES_PM");
+    return { job, lead, salesUsers };
+  });
+
   for (const u of salesUsers) {
     await notify(
       u.id,
@@ -331,10 +363,20 @@ export async function saveWorkSummary(formData: FormData) {
   const session = await requireSession();
   const jobId = str(formData, "jobId");
   const mode = str(formData, "mode");
-  const job = await getJobOrThrow(jobId);
 
-  let summary = str(formData, "summary");
-  if (mode === "ai" || !summary) summary = aiDraftSummary(job.jobType, job.customer.name);
+  const { job, summary } = await withTenant(session.organizationId, async (tx) => {
+    const job = await getJobOrThrow(tx, jobId);
+
+    let summary = str(formData, "summary");
+    if (mode === "ai" || !summary) summary = aiDraftSummary(job.jobType, job.customer.name);
+
+    const stamp = `[Closeout summary — ${session.name}] ${summary}`;
+    await tx
+      .update(t.jobs)
+      .set({ internalNotes: job.internalNotes ? `${job.internalNotes}\n\n${stamp}` : stamp })
+      .where(eq(t.jobs.id, jobId));
+    return { job, summary };
+  });
 
   await logActivity({
     kind: "NOTE",
@@ -343,18 +385,13 @@ export async function saveWorkSummary(formData: FormData) {
     jobId,
     customerId: job.customerId,
   });
-  const stamp = `[Closeout summary — ${session.name}] ${summary}`;
-  await db
-    .update(t.jobs)
-    .set({ internalNotes: job.internalNotes ? `${job.internalNotes}\n\n${stamp}` : stamp })
-    .where(eq(t.jobs.id, jobId));
   revalidateJob(jobId);
 }
 
 // ── Closeout: invoice ────────────────────────────────────────────────────────
 
-async function nextInvoiceNumber(): Promise<string> {
-  const rows = await db
+async function nextInvoiceNumber(tx: TenantDb): Promise<string> {
+  const rows = await tx
     .select({ number: t.invoices.number })
     .from(t.invoices)
     .where(like(t.invoices.number, "INV-%"));
@@ -369,77 +406,83 @@ export async function generateInvoice(formData: FormData) {
   const session = await requireSession();
   if (!can(session.role, "invoices.create")) throw new Error("Not allowed");
   const jobId = str(formData, "jobId");
-  const job = await getJobOrThrow(jobId);
 
-  const existing = await db.query.invoices.findFirst({ where: eq(t.invoices.jobId, jobId) });
-  if (existing) return; // idempotent
+  const created = await withTenant(session.organizationId, async (tx) => {
+    const job = await getJobOrThrow(tx, jobId);
 
-  const number = await nextInvoiceNumber();
-  const dueAt = new Date();
-  dueAt.setDate(dueAt.getDate() + 30);
+    const existing = await tx.query.invoices.findFirst({ where: eq(t.invoices.jobId, jobId) });
+    if (existing) return null; // idempotent
 
-  const [invoice] = await db
-    .insert(t.invoices)
-    .values({
-      number,
-      status: "SENT",
-      customerId: job.customerId,
-      jobId,
-      issuedAt: new Date(),
-      dueAt,
-    })
-    .returning();
+    const number = await nextInvoiceNumber(tx);
+    const dueAt = new Date();
+    dueAt.setDate(dueAt.getDate() + 30);
 
-  // Lines from materials used (price book prices)
-  const materials = await db.query.materialUsages.findMany({
-    where: eq(t.materialUsages.jobId, jobId),
-    with: { priceBookItem: true },
+    const [invoice] = await tx
+      .insert(t.invoices)
+      .values({
+        number,
+        status: "SENT",
+        customerId: job.customerId,
+        jobId,
+        issuedAt: new Date(),
+        dueAt,
+      })
+      .returning();
+
+    // Lines from materials used (price book prices)
+    const materials = await tx.query.materialUsages.findMany({
+      where: eq(t.materialUsages.jobId, jobId),
+      with: { priceBookItem: true },
+    });
+    const lines: (typeof t.invoiceLineItems.$inferInsert)[] = materials.map((m) => ({
+      invoiceId: invoice.id,
+      priceBookItemId: m.priceBookItemId,
+      description: m.priceBookItem.name,
+      qty: m.qty,
+      unitPriceCents: m.priceBookItem.unitPriceCents,
+    }));
+
+    // Labor line: flat-rate from price book if the job type matches, else standard labor
+    const items = await tx
+      .select()
+      .from(t.priceBookItems)
+      .where(eq(t.priceBookItems.active, true))
+      .orderBy(asc(t.priceBookItems.unitPriceCents));
+    const jt = job.jobType.toLowerCase();
+    const singular = (s: string) => s.toLowerCase().replace(/s$/, "");
+    const flatRate =
+      items.find((i) => i.laborHours != null && i.name.toLowerCase().includes(jt)) ??
+      items.find((i) => i.laborHours != null && jt.includes(singular(i.category)));
+    if (flatRate && !materials.some((m) => m.priceBookItemId === flatRate.id)) {
+      lines.push({
+        invoiceId: invoice.id,
+        priceBookItemId: flatRate.id,
+        description: `${flatRate.name} (flat rate)`,
+        qty: 1,
+        unitPriceCents: flatRate.unitPriceCents,
+      });
+    } else if (!flatRate) {
+      lines.push({
+        invoiceId: invoice.id,
+        description: "Service labor",
+        qty: 1,
+        unitPriceCents: 18900,
+      });
+    }
+    if (lines.length) await tx.insert(t.invoiceLineItems).values(lines);
+
+    return { job, invoice, number };
   });
-  const lines: (typeof t.invoiceLineItems.$inferInsert)[] = materials.map((m) => ({
-    invoiceId: invoice.id,
-    priceBookItemId: m.priceBookItemId,
-    description: m.priceBookItem.name,
-    qty: m.qty,
-    unitPriceCents: m.priceBookItem.unitPriceCents,
-  }));
-
-  // Labor line: flat-rate from price book if the job type matches, else standard labor
-  const items = await db
-    .select()
-    .from(t.priceBookItems)
-    .where(eq(t.priceBookItems.active, true))
-    .orderBy(asc(t.priceBookItems.unitPriceCents));
-  const jt = job.jobType.toLowerCase();
-  const singular = (s: string) => s.toLowerCase().replace(/s$/, "");
-  const flatRate =
-    items.find((i) => i.laborHours != null && i.name.toLowerCase().includes(jt)) ??
-    items.find((i) => i.laborHours != null && jt.includes(singular(i.category)));
-  if (flatRate && !materials.some((m) => m.priceBookItemId === flatRate.id)) {
-    lines.push({
-      invoiceId: invoice.id,
-      priceBookItemId: flatRate.id,
-      description: `${flatRate.name} (flat rate)`,
-      qty: 1,
-      unitPriceCents: flatRate.unitPriceCents,
-    });
-  } else if (!flatRate) {
-    lines.push({
-      invoiceId: invoice.id,
-      description: "Service labor",
-      qty: 1,
-      unitPriceCents: 18900,
-    });
-  }
-  if (lines.length) await db.insert(t.invoiceLineItems).values(lines);
+  if (!created) return;
 
   await logActivity({
     kind: "SYSTEM",
-    body: `Invoice ${number} generated for ${job.number}`,
+    body: `Invoice ${created.number} generated for ${created.job.number}`,
     userId: session.userId,
     jobId,
-    customerId: job.customerId,
+    customerId: created.job.customerId,
   });
-  await audit(session.userId, "INVOICE_CREATE", "Invoice", invoice.id, { jobId, number });
+  await audit(session.userId, "INVOICE_CREATE", "Invoice", created.invoice.id, { jobId, number: created.number });
   revalidateJob(jobId);
 }
 
@@ -450,17 +493,20 @@ export async function addInvoiceLine(formData: FormData) {
   const priceBookItemId = str(formData, "priceBookItemId");
   const qty = Math.max(0.1, Number(str(formData, "qty") || "1"));
 
-  const invoice = await db.query.invoices.findFirst({ where: eq(t.invoices.id, invoiceId) });
-  if (!invoice) throw new Error("Invoice not found");
-  const item = await db.query.priceBookItems.findFirst({ where: eq(t.priceBookItems.id, priceBookItemId) });
-  if (!item) throw new Error("Price book item not found");
+  const invoice = await withTenant(session.organizationId, async (tx) => {
+    const invoice = await tx.query.invoices.findFirst({ where: eq(t.invoices.id, invoiceId) });
+    if (!invoice) throw new Error("Invoice not found");
+    const item = await tx.query.priceBookItems.findFirst({ where: eq(t.priceBookItems.id, priceBookItemId) });
+    if (!item) throw new Error("Price book item not found");
 
-  await db.insert(t.invoiceLineItems).values({
-    invoiceId,
-    priceBookItemId,
-    description: item.name,
-    qty,
-    unitPriceCents: item.unitPriceCents,
+    await tx.insert(t.invoiceLineItems).values({
+      invoiceId,
+      priceBookItemId,
+      description: item.name,
+      qty,
+      unitPriceCents: item.unitPriceCents,
+    });
+    return invoice;
   });
   if (invoice.jobId) revalidateJob(invoice.jobId);
 }
@@ -473,13 +519,17 @@ export async function signInvoice(formData: FormData) {
   const signedName = str(formData, "signedName");
   if (!signedName) throw new Error("Signature name required");
 
-  const invoice = await db.query.invoices.findFirst({ where: eq(t.invoices.id, invoiceId) });
-  if (!invoice) throw new Error("Invoice not found");
+  const invoice = await withTenant(session.organizationId, async (tx) => {
+    const invoice = await tx.query.invoices.findFirst({ where: eq(t.invoices.id, invoiceId) });
+    if (!invoice) throw new Error("Invoice not found");
 
-  await db
-    .update(t.invoices)
-    .set({ signedName, signedAt: new Date() })
-    .where(eq(t.invoices.id, invoiceId));
+    await tx
+      .update(t.invoices)
+      .set({ signedName, signedAt: new Date() })
+      .where(eq(t.invoices.id, invoiceId));
+    return invoice;
+  });
+
   if (invoice.jobId) {
     await logActivity({
       kind: "NOTE",
@@ -500,23 +550,27 @@ export async function recordPayment(formData: FormData) {
   const amountCents = Math.round(Number(str(formData, "amount") || "0") * 100);
   if (amountCents <= 0) throw new Error("Amount must be positive");
 
-  const invoice = await db.query.invoices.findFirst({
-    where: eq(t.invoices.id, invoiceId),
-    with: { items: true, payments: true },
-  });
-  if (!invoice) throw new Error("Invoice not found");
+  const { invoice, status } = await withTenant(session.organizationId, async (tx) => {
+    const invoice = await tx.query.invoices.findFirst({
+      where: eq(t.invoices.id, invoiceId),
+      with: { items: true, payments: true },
+    });
+    if (!invoice) throw new Error("Invoice not found");
 
-  await db.insert(t.payments).values({
-    invoiceId,
-    amountCents,
-    method,
-    reference: `field_${method.toLowerCase()}_${invoice.number.replace("INV-", "")}`,
-  });
+    await tx.insert(t.payments).values({
+      invoiceId,
+      amountCents,
+      method,
+      reference: `field_${method.toLowerCase()}_${invoice.number.replace("INV-", "")}`,
+    });
 
-  const total = invoice.items.reduce((s, i) => s + Math.round(i.qty * i.unitPriceCents), 0);
-  const paid = invoice.payments.reduce((s, p) => s + p.amountCents, 0) + amountCents;
-  const status = paid >= total ? "PAID" : "PARTIAL";
-  await db.update(t.invoices).set({ status }).where(eq(t.invoices.id, invoiceId));
+    const total = invoice.items.reduce((s, i) => s + Math.round(i.qty * i.unitPriceCents), 0);
+    const paid = invoice.payments.reduce((s, p) => s + p.amountCents, 0) + amountCents;
+    const status = paid >= total ? "PAID" : "PARTIAL";
+    await tx.update(t.invoices).set({ status }).where(eq(t.invoices.id, invoiceId));
+
+    return { invoice, status };
+  });
 
   await logActivity({
     kind: "PAYMENT",
@@ -534,30 +588,39 @@ export async function recordPayment(formData: FormData) {
 export async function finishCloseout(formData: FormData) {
   const session = await requireSession();
   const jobId = str(formData, "jobId");
-  const job = await getJobOrThrow(jobId);
-  if (job.status === "COMPLETED") redirect("/my-day");
 
-  // Server-side validation: photos + required forms + invoice paid-or-sent
-  const photos = await db.select().from(t.jobPhotos).where(eq(t.jobPhotos.jobId, jobId));
-  if (!photos.some((p) => p.kind === "BEFORE") || !photos.some((p) => p.kind === "AFTER"))
-    throw new Error("Closeout blocked: need at least one BEFORE and one AFTER photo");
+  const result = await withTenant(session.organizationId, async (tx) => {
+    const job = await getJobOrThrow(tx, jobId);
+    if (job.status === "COMPLETED") return { alreadyDone: true as const };
 
-  const forms = await db.select().from(t.jobForms).where(eq(t.jobForms.jobId, jobId));
-  if (forms.some((f) => f.required && !f.completedAt))
-    throw new Error("Closeout blocked: required forms incomplete");
+    // Server-side validation: photos + required forms + invoice paid-or-sent
+    const photos = await tx.select().from(t.jobPhotos).where(eq(t.jobPhotos.jobId, jobId));
+    if (!photos.some((p) => p.kind === "BEFORE") || !photos.some((p) => p.kind === "AFTER"))
+      throw new Error("Closeout blocked: need at least one BEFORE and one AFTER photo");
 
-  const invoice = await db.query.invoices.findFirst({ where: eq(t.invoices.jobId, jobId) });
-  if (!invoice || !["SENT", "PARTIAL", "PAID"].includes(invoice.status))
-    throw new Error("Closeout blocked: invoice must be generated (sent or paid)");
+    const forms = await tx.select().from(t.jobForms).where(eq(t.jobForms.jobId, jobId));
+    if (forms.some((f) => f.required && !f.completedAt))
+      throw new Error("Closeout blocked: required forms incomplete");
 
-  const now = new Date();
-  await db.update(t.jobs).set({ status: "COMPLETED", completedAt: now }).where(eq(t.jobs.id, jobId));
+    const invoice = await tx.query.invoices.findFirst({ where: eq(t.invoices.jobId, jobId) });
+    if (!invoice || !["SENT", "PARTIAL", "PAID"].includes(invoice.status))
+      throw new Error("Closeout blocked: invoice must be generated (sent or paid)");
 
-  // Stop all open clocks on this job
-  await db
-    .update(t.timeEntries)
-    .set({ endedAt: now })
-    .where(and(eq(t.timeEntries.jobId, jobId), isNull(t.timeEntries.endedAt)));
+    const now = new Date();
+    await tx.update(t.jobs).set({ status: "COMPLETED", completedAt: now }).where(eq(t.jobs.id, jobId));
+
+    // Stop all open clocks on this job
+    await tx
+      .update(t.timeEntries)
+      .set({ endedAt: now })
+      .where(and(eq(t.timeEntries.jobId, jobId), isNull(t.timeEntries.endedAt)));
+
+    const office = await usersByRole(tx, "OFFICE");
+    return { alreadyDone: false as const, job, invoice, office };
+  });
+
+  if (result.alreadyDone) redirect("/my-day");
+  const { job, invoice, office } = result;
 
   await logActivity({
     kind: "STATUS",
@@ -574,7 +637,6 @@ export async function finishCloseout(formData: FormData) {
     customerId: job.customerId,
   });
 
-  const office = await usersByRole("OFFICE");
   for (const u of office) {
     await notify(
       u.id,

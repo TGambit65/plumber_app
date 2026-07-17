@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { desc } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -24,15 +24,17 @@ export default async function EstimatesPage() {
   const session = await requireSession();
   if (!can(session.role, "estimates.create")) return <Forbidden />;
 
-  const estimates = await db.query.estimates.findMany({
-    with: {
-      customer: true,
-      createdBy: true,
-      options: { with: { items: true } },
-      followUps: true,
-    },
-    orderBy: [desc(t.estimates.createdAt)],
-  });
+  const estimates = await withTenant(session.organizationId, (tx) =>
+    tx.query.estimates.findMany({
+      with: {
+        customer: true,
+        createdBy: true,
+        options: { with: { items: true } },
+        followUps: true,
+      },
+      orderBy: [desc(t.estimates.createdAt)],
+    })
+  );
 
   const openValue = estimates
     .filter((e) => ["SENT", "VIEWED", "DRAFT"].includes(e.status))

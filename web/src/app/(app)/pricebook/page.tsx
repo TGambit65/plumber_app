@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { and, asc, ilike, or, eq, type SQL } from "drizzle-orm";
@@ -53,14 +53,16 @@ export default async function PriceBookPage({
   }
   if (cat) conds.push(eq(t.priceBookItems.category, cat));
 
-  const [items, allItems] = await Promise.all([
-    db
+  // All page queries run in ONE tenant-scoped transaction.
+  const [items, allItems] = await withTenant(session.organizationId, async (tx) => {
+    const itemRows = await tx
       .select()
       .from(t.priceBookItems)
       .where(conds.length ? and(...conds) : undefined)
-      .orderBy(asc(t.priceBookItems.category), asc(t.priceBookItems.name)),
-    db.select({ category: t.priceBookItems.category }).from(t.priceBookItems),
-  ]);
+      .orderBy(asc(t.priceBookItems.category), asc(t.priceBookItems.name));
+    const allRows = await tx.select({ category: t.priceBookItems.category }).from(t.priceBookItems);
+    return [itemRows, allRows] as const;
+  });
   const categories = Array.from(new Set(allItems.map((i) => i.category))).sort();
 
   return (

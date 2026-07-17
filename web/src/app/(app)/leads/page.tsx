@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { desc, eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -37,13 +37,15 @@ export default async function LeadsPage({
   const stageFilter = STAGES.includes(searchParams.stage ?? "") ? searchParams.stage : undefined;
   const sourceFilter = Object.keys(SOURCE_META).includes(searchParams.source ?? "") ? searchParams.source : undefined;
 
-  const [allLeads, reps] = await Promise.all([
-    db.query.leads.findMany({
-      with: { assignedTo: true, customer: true },
-      orderBy: [desc(t.leads.createdAt)],
-    }),
-    db.query.users.findMany({ where: eq(t.users.active, true), orderBy: [t.users.name] }),
-  ]);
+  const [allLeads, reps] = await withTenant(session.organizationId, (tx) =>
+    Promise.all([
+      tx.query.leads.findMany({
+        with: { assignedTo: true, customer: true },
+        orderBy: [desc(t.leads.createdAt)],
+      }),
+      tx.query.users.findMany({ where: eq(t.users.active, true), orderBy: [t.users.name] }),
+    ])
+  );
 
   const leads = allLeads.filter(
     (l) => (!stageFilter || l.stage === stageFilter) && (!sourceFilter || l.source === sourceFilter)

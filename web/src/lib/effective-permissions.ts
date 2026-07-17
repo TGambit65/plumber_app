@@ -1,9 +1,10 @@
 import "server-only";
 import { cache } from "react";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { eq } from "drizzle-orm";
 import { ROLE_PERMISSIONS, type Permission } from "./permissions";
 import type { Role, Session } from "./auth";
+import { getSession } from "./auth";
 
 /**
  * Effective permissions = role bundle + granted overrides − revoked overrides.
@@ -12,10 +13,14 @@ import type { Role, Session } from "./auth";
 export const effectivePermissions = cache(
   async (userId: string, role: Role): Promise<Set<Permission>> => {
     const base = new Set<Permission>(ROLE_PERMISSIONS[role]);
-    const overrides = await db
-      .select({ permission: t.userPermissionOverrides.permission, granted: t.userPermissionOverrides.granted })
-      .from(t.userPermissionOverrides)
-      .where(eq(t.userPermissionOverrides.userId, userId));
+    const session = await getSession();
+    if (!session) return base;
+    const overrides = await withTenant(session.organizationId, (tx) =>
+      tx
+        .select({ permission: t.userPermissionOverrides.permission, granted: t.userPermissionOverrides.granted })
+        .from(t.userPermissionOverrides)
+        .where(eq(t.userPermissionOverrides.userId, userId))
+    );
     for (const o of overrides) {
       if (o.granted) base.add(o.permission as Permission);
       else base.delete(o.permission as Permission);

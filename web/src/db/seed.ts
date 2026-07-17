@@ -74,15 +74,14 @@ async function main() {
     ])
     .returning();
   const packByKey = Object.fromEntries(packs.map((p) => [p.key, p]));
+
+  // ── Everything below is Apex's tenant data (org_id auto-fills from GUC;
+  //    RLS WITH CHECK requires the GUC to match) ──
+  await setOrg(apex.id);
   await db.insert(t.organizationTradePacks).values([
     { organizationId: apex.id, tradePackId: packByKey["plumbing"].id },
     { organizationId: apex.id, tradePackId: packByKey["sewer"].id },
-    { organizationId: summit.id, tradePackId: packByKey["hvac"].id },
-    { organizationId: summit.id, tradePackId: packByKey["plumbing"].id },
   ]);
-
-  // ── Everything below is Apex's tenant data (org_id auto-fills from GUC) ──
-  await setOrg(apex.id);
 
   console.log("Users…");
   const hash = await bcrypt.hash("demo1234", 10);
@@ -600,6 +599,10 @@ async function main() {
   // ── Org B: Summit HVAC (compact dataset — proves tenant isolation) ──────────
   await setOrg(summit.id);
   console.log("Summit HVAC (org B)…");
+  await db.insert(t.organizationTradePacks).values([
+    { organizationId: summit.id, tradePackId: packByKey["hvac"].id },
+    { organizationId: summit.id, tradePackId: packByKey["plumbing"].id },
+  ]);
   const [sAdmin, sTech] = await db
     .insert(t.users)
     .values([

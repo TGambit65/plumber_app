@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { desc, eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -37,23 +37,26 @@ const OPEN_JOB = new Set(["UNSCHEDULED", "SCHEDULED", "DISPATCHED", "EN_ROUTE", 
 export default async function CustomerDetailPage({ params }: { params: { id: string } }) {
   const session = await requireSession();
 
-  const customer = await db.query.customers.findFirst({
-    where: eq(t.customers.id, params.id),
-    with: {
-      membership: true,
-      properties: { with: { equipment: true } },
-      jobs: { with: { property: true, assignedTo: true }, orderBy: (j, { desc: d }) => [d(j.createdAt)] },
-      estimates: { with: { options: { with: { items: true } } }, orderBy: (e, { desc: d }) => [d(e.createdAt)] },
-      invoices: { with: { items: true, payments: true }, orderBy: (i, { desc: d }) => [d(i.createdAt)] },
-      activities: { with: { user: true }, orderBy: (a, { desc: d }) => [d(a.createdAt)] },
-    },
+  const { customer, leads } = await withTenant(session.organizationId, async (tx) => {
+    const found = await tx.query.customers.findFirst({
+      where: eq(t.customers.id, params.id),
+      with: {
+        membership: true,
+        properties: { with: { equipment: true } },
+        jobs: { with: { property: true, assignedTo: true }, orderBy: (j, { desc: d }) => [d(j.createdAt)] },
+        estimates: { with: { options: { with: { items: true } } }, orderBy: (e, { desc: d }) => [d(e.createdAt)] },
+        invoices: { with: { items: true, payments: true }, orderBy: (i, { desc: d }) => [d(i.createdAt)] },
+        activities: { with: { user: true }, orderBy: (a, { desc: d }) => [d(a.createdAt)] },
+      },
+    });
+    if (!found) return { customer: null, leads: [] as Awaited<ReturnType<typeof tx.query.leads.findMany>> };
+    const foundLeads = await tx.query.leads.findMany({
+      where: eq(t.leads.customerId, found.id),
+      orderBy: desc(t.leads.createdAt),
+    });
+    return { customer: found, leads: foundLeads };
   });
   if (!customer) notFound();
-
-  const leads = await db.query.leads.findMany({
-    where: eq(t.leads.customerId, customer.id),
-    orderBy: desc(t.leads.createdAt),
-  });
 
   const canEdit = can(session.role, "customers.edit");
   const openJobs = customer.jobs.filter((j) => OPEN_JOB.has(j.status));

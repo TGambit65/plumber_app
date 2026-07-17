@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { asc, and, desc, eq, ne } from "drizzle-orm";
 import { fmtDate, fmtDateTime, fmtTime, money, timeAgo, lineTotal } from "@/lib/format";
@@ -70,37 +70,42 @@ function equipmentAge(installedAt: Date | null): string | null {
 }
 
 export default async function JobDetailPage({ params }: { params: { id: string } }) {
-  await requireSession();
+  const session = await requireSession();
 
-  const job = await db.query.jobs.findFirst({
-    where: eq(t.jobs.id, params.id),
-    with: {
-      customer: { with: { membership: true } },
-      property: { with: { equipment: true } },
-      assignedTo: true,
-      photos: { with: { takenBy: true }, orderBy: asc(t.jobPhotos.takenAt) },
-      forms: { orderBy: asc(t.jobForms.name) },
-      timeEntries: { with: { user: true }, orderBy: asc(t.timeEntries.startedAt) },
-      estimates: true,
-      invoices: { with: { items: true } },
-      materials: { with: { priceBookItem: true }, orderBy: asc(t.materialUsages.usedAt) },
-      activities: { with: { user: true }, orderBy: desc(t.activities.createdAt) },
-    },
+  const data = await withTenant(session.organizationId, async (tx) => {
+    const job = await tx.query.jobs.findFirst({
+      where: eq(t.jobs.id, params.id),
+      with: {
+        customer: { with: { membership: true } },
+        property: { with: { equipment: true } },
+        assignedTo: true,
+        photos: { with: { takenBy: true }, orderBy: asc(t.jobPhotos.takenAt) },
+        forms: { orderBy: asc(t.jobForms.name) },
+        timeEntries: { with: { user: true }, orderBy: asc(t.timeEntries.startedAt) },
+        estimates: true,
+        invoices: { with: { items: true } },
+        materials: { with: { priceBookItem: true }, orderBy: asc(t.materialUsages.usedAt) },
+        activities: { with: { user: true }, orderBy: desc(t.activities.createdAt) },
+      },
+    });
+    if (!job) return null;
+
+    const [priorJobs, priceBook] = await Promise.all([
+      tx.query.jobs.findMany({
+        where: and(eq(t.jobs.propertyId, job.propertyId), ne(t.jobs.id, job.id)),
+        orderBy: desc(t.jobs.createdAt),
+        limit: 6,
+      }),
+      tx
+        .select()
+        .from(t.priceBookItems)
+        .where(eq(t.priceBookItems.active, true))
+        .orderBy(asc(t.priceBookItems.category), asc(t.priceBookItems.name)),
+    ]);
+    return { job, priorJobs, priceBook };
   });
-  if (!job) notFound();
-
-  const [priorJobs, priceBook] = await Promise.all([
-    db.query.jobs.findMany({
-      where: and(eq(t.jobs.propertyId, job.propertyId), ne(t.jobs.id, job.id)),
-      orderBy: desc(t.jobs.createdAt),
-      limit: 6,
-    }),
-    db
-      .select()
-      .from(t.priceBookItems)
-      .where(eq(t.priceBookItems.active, true))
-      .orderBy(asc(t.priceBookItems.category), asc(t.priceBookItems.name)),
-  ]);
+  if (!data) notFound();
+  const { job, priorJobs, priceBook } = data;
 
   const next = NEXT_STEP[job.status];
   const mapsHref = `https://maps.google.com/?q=${encodeURIComponent(

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { and, asc, eq, gte, isNull, lt, notInArray, or } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -70,32 +70,36 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
   const nextStr = toDateStr(new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1));
   const isToday = dateStr === toDateStr(new Date());
 
-  const [techs, dayJobs, unassigned, emergencies, customers, properties] = await Promise.all([
-    db.query.users.findMany({
-      where: and(eq(t.users.role, "TECH"), eq(t.users.active, true)),
-      with: { truck: true },
-      orderBy: asc(t.users.name),
-    }),
-    db.query.jobs.findMany({
-      where: and(gte(t.jobs.scheduledAt, day), lt(t.jobs.scheduledAt, dayEnd)),
-      with: { customer: true, property: true },
-      orderBy: asc(t.jobs.scheduledAt),
-    }),
-    db.query.jobs.findMany({
-      where: and(
-        or(eq(t.jobs.status, "UNSCHEDULED"), isNull(t.jobs.assignedToId)),
-        notInArray(t.jobs.status, ["COMPLETED", "CANCELLED"])
-      ),
-      with: { customer: true, property: true },
-      orderBy: asc(t.jobs.createdAt),
-    }),
-    db.query.jobs.findMany({
-      where: and(eq(t.jobs.priority, "EMERGENCY"), notInArray(t.jobs.status, ["COMPLETED", "CANCELLED"])),
-      columns: { id: true },
-    }),
-    db.query.customers.findMany({ orderBy: asc(t.customers.name) }),
-    db.query.properties.findMany({ with: { customer: true }, orderBy: asc(t.properties.address) }),
-  ]);
+  const [techs, dayJobs, unassigned, emergencies, customers, properties] = await withTenant(
+    session.organizationId,
+    (tx) =>
+      Promise.all([
+        tx.query.users.findMany({
+          where: and(eq(t.users.role, "TECH"), eq(t.users.active, true)),
+          with: { truck: true },
+          orderBy: asc(t.users.name),
+        }),
+        tx.query.jobs.findMany({
+          where: and(gte(t.jobs.scheduledAt, day), lt(t.jobs.scheduledAt, dayEnd)),
+          with: { customer: true, property: true },
+          orderBy: asc(t.jobs.scheduledAt),
+        }),
+        tx.query.jobs.findMany({
+          where: and(
+            or(eq(t.jobs.status, "UNSCHEDULED"), isNull(t.jobs.assignedToId)),
+            notInArray(t.jobs.status, ["COMPLETED", "CANCELLED"])
+          ),
+          with: { customer: true, property: true },
+          orderBy: asc(t.jobs.createdAt),
+        }),
+        tx.query.jobs.findMany({
+          where: and(eq(t.jobs.priority, "EMERGENCY"), notInArray(t.jobs.status, ["COMPLETED", "CANCELLED"])),
+          columns: { id: true },
+        }),
+        tx.query.customers.findMany({ orderBy: asc(t.customers.name) }),
+        tx.query.properties.findMany({ with: { customer: true }, orderBy: asc(t.properties.address) }),
+      ])
+  );
 
   const statusCounts = dayJobs.reduce<Record<string, number>>((acc, j) => {
     acc[j.status] = (acc[j.status] ?? 0) + 1;

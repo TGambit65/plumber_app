@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -51,24 +51,26 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   const session = await requireSession();
   if (!can(session.role, "leads.create")) return <Forbidden />;
 
-  const lead = await db.query.leads.findFirst({
-    where: eq(t.leads.id, params.id),
-    with: {
-      customer: true,
-      property: true,
-      assignedTo: true,
-      createdBy: true,
-      followUps: true,
-      estimates: { with: { options: { with: { items: true } } } },
-      activities: { with: { user: true } },
-    },
+  const { lead, customers } = await withTenant(session.organizationId, async (tx) => {
+    const lead = await tx.query.leads.findFirst({
+      where: eq(t.leads.id, params.id),
+      with: {
+        customer: true,
+        property: true,
+        assignedTo: true,
+        createdBy: true,
+        followUps: true,
+        estimates: { with: { options: { with: { items: true } } } },
+        activities: { with: { user: true } },
+      },
+    });
+    const customers =
+      !lead || lead.customerId ? [] : await tx.query.customers.findMany({ orderBy: [t.customers.name] });
+    return { lead, customers };
   });
   if (!lead) notFound();
 
   const canManage = can(session.role, "pipeline.manage");
-  const customers = lead.customerId
-    ? []
-    : await db.query.customers.findMany({ orderBy: [t.customers.name] });
 
   const activities = [...lead.activities].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()

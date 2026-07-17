@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { asc, desc, eq } from "drizzle-orm";
@@ -45,14 +45,16 @@ export default async function CommissionsPage({
   const session = await requireSession();
   if (!can(session.role, "commissions.view.all")) redirect("/earnings");
 
-  const [entries, rules, users] = await Promise.all([
-    db.query.commissionEntries.findMany({
-      with: { user: true },
-      orderBy: [desc(t.commissionEntries.createdAt)],
-    }),
-    db.select().from(t.commissionRules).where(eq(t.commissionRules.active, true)),
-    db.select().from(t.users).where(eq(t.users.active, true)).orderBy(asc(t.users.name)),
-  ]);
+  const [entries, rules, users] = await withTenant(session.organizationId, (tx) =>
+    Promise.all([
+      tx.query.commissionEntries.findMany({
+        with: { user: true },
+        orderBy: [desc(t.commissionEntries.createdAt)],
+      }),
+      tx.select().from(t.commissionRules).where(eq(t.commissionRules.active, true)),
+      tx.select().from(t.users).where(eq(t.users.active, true)).orderBy(asc(t.users.name)),
+    ])
+  );
 
   const currentPeriod = new Date().toISOString().slice(0, 7);
   const pendingTotal = entries.filter((e) => e.status === "PENDING").reduce((s, e) => s + e.amountCents, 0);

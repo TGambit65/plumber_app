@@ -11,7 +11,7 @@
     "db:generate": "drizzle-kit generate",
     "db:seed": "tsx --env-file=.env src/db/seed.ts",
     "test": "vitest run",
-    "db:rls": "psql $DATABASE_URL -f src/db/rls.sql"
+    "db:rls": "echo \"Run as a superuser/BYPASSRLS role: psql -d <db> -f src/db/rls.sql\" && sudo -u postgres psql -d plumber_app -f src/db/rls.sql"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

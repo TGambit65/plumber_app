@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { asc, desc, eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import type { Role } from "@/lib/auth";
@@ -125,10 +125,10 @@ export default async function SettingsPage({ searchParams }: { searchParams: { t
         ))}
       </div>
 
-      {tab === "team" ? <TeamTab currentUserId={session.userId} /> : null}
-      {tab === "integrations" ? <IntegrationsTab /> : null}
-      {tab === "commissions" ? <CommissionsTab /> : null}
-      {tab === "audit" ? <AuditTab /> : null}
+      {tab === "team" ? <TeamTab currentUserId={session.userId} organizationId={session.organizationId} /> : null}
+      {tab === "integrations" ? <IntegrationsTab organizationId={session.organizationId} /> : null}
+      {tab === "commissions" ? <CommissionsTab organizationId={session.organizationId} /> : null}
+      {tab === "audit" ? <AuditTab organizationId={session.organizationId} /> : null}
       {tab === "company" ? <CompanyTab /> : null}
     </div>
   );
@@ -173,9 +173,13 @@ function PermButton({
   );
 }
 
-async function TeamTab({ currentUserId }: { currentUserId: string }) {
-  const users = await db.query.users.findMany({ with: { truck: true }, orderBy: asc(t.users.name) });
-  const overrides = await db.select().from(t.userPermissionOverrides);
+async function TeamTab({ currentUserId, organizationId }: { currentUserId: string; organizationId: string }) {
+  const [users, overrides] = await withTenant(organizationId, (tx) =>
+    Promise.all([
+      tx.query.users.findMany({ with: { truck: true }, orderBy: asc(t.users.name) }),
+      tx.select().from(t.userPermissionOverrides),
+    ])
+  );
   const ovByUser = new Map<string, Map<Permission, boolean>>();
   for (const o of overrides) {
     if (!ovByUser.has(o.userId)) ovByUser.set(o.userId, new Map());
@@ -331,10 +335,12 @@ async function TeamTab({ currentUserId }: { currentUserId: string }) {
 
 // ── Integrations ─────────────────────────────────────────────────────────────
 
-async function IntegrationsTab() {
-  const all = await db.query.integrationConnections.findMany({
-    orderBy: asc(t.integrationConnections.provider),
-  });
+async function IntegrationsTab({ organizationId }: { organizationId: string }) {
+  const all = await withTenant(organizationId, (tx) =>
+    tx.query.integrationConnections.findMany({
+      orderBy: asc(t.integrationConnections.provider),
+    })
+  );
   const orgMemory = all.find((c) => c.provider === "ORGMEMORY");
   const orgCfg = (orgMemory?.config ?? {}) as { gatewayUrl?: string; token?: string; namespace?: string };
   const connections = all.filter((c) => c.provider !== "ORGMEMORY");
@@ -454,11 +460,13 @@ async function IntegrationsTab() {
 
 // ── Commissions ──────────────────────────────────────────────────────────────
 
-async function CommissionsTab() {
-  const [rules, entries] = await Promise.all([
-    db.query.commissionRules.findMany({ orderBy: asc(t.commissionRules.name) }),
-    db.query.commissionEntries.findMany({ with: { user: true }, orderBy: desc(t.commissionEntries.createdAt) }),
-  ]);
+async function CommissionsTab({ organizationId }: { organizationId: string }) {
+  const [rules, entries] = await withTenant(organizationId, (tx) =>
+    Promise.all([
+      tx.query.commissionRules.findMany({ orderBy: asc(t.commissionRules.name) }),
+      tx.query.commissionEntries.findMany({ with: { user: true }, orderBy: desc(t.commissionEntries.createdAt) }),
+    ])
+  );
 
   return (
     <div className="space-y-4">
@@ -582,13 +590,15 @@ async function CommissionsTab() {
 
 // ── Audit log ────────────────────────────────────────────────────────────────
 
-async function AuditTab() {
-  const logs = await db
-    .select({ log: t.auditLogs, user: t.users })
-    .from(t.auditLogs)
-    .leftJoin(t.users, eq(t.auditLogs.userId, t.users.id))
-    .orderBy(desc(t.auditLogs.createdAt))
-    .limit(50);
+async function AuditTab({ organizationId }: { organizationId: string }) {
+  const logs = await withTenant(organizationId, (tx) =>
+    tx
+      .select({ log: t.auditLogs, user: t.users })
+      .from(t.auditLogs)
+      .leftJoin(t.users, eq(t.auditLogs.userId, t.users.id))
+      .orderBy(desc(t.auditLogs.createdAt))
+      .limit(50)
+  );
 
   return (
     <Card>

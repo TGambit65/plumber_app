@@ -51,25 +51,31 @@ When principles conflict, prefer higher on this list (the "if in doubt" order):
   cross-tenant leak). Verified: Summit HVAC cannot read Apex's SOPs even by exact
   slug; no-context reads return 0.
 
-### Incremental conversion status (IMPORTANT)
+### Conversion status: ✅ COMPLETE — RLS ON everywhere
 
-RLS is enabled **table-by-table**, only after every code path touching a table
-runs through `withTenant`. This keeps the app working during conversion.
+All modules (~35 files, ~220 query sites) run through `withTenant`; **FORCE RLS
+is enabled on all 41 tenant-owned tables**, including `users`. The only tables
+without RLS are the globals: `organizations` (the tenant roots) and
+`trade_packs` (shared catalog).
 
-- ✅ **Converted + RLS ON:** `kb_articles` (Knowledge Base module) — the proven,
-  isolation-tested vertical slice (KB pages, KB actions, global-search KB facet,
-  OrgMemory store all org-scoped).
-- ⏳ **Pending (RLS OFF, still functional):** jobs, customers, properties,
-  equipment, leads, estimates, invoices, projects, price_book_items, inventory,
-  commissions, activities, notifications, messaging, integration_connections,
-  users. These have `organization_id` columns and are seeded per-org, but their
-  read/write paths (~35 files, ~220 query sites) still use the base `db` client.
-  Each module is converted the same way KB was, then its table is added to the
-  `rls_tables` array in `rls.sql`.
+- **Login bootstrap** — the one legitimate cross-tenant read — goes through
+  `auth_user_by_email()`, a `SECURITY DEFINER` function (bottom of
+  `src/db/rls.sql`) owned by a BYPASSRLS-capable role. Everything else reads
+  users inside `withTenant`. Run `rls.sql` as a superuser (`npm run db:rls`).
+- **Verified end-to-end** (Playwright + SQL, both orgs): 31-page read tour
+  clean; mutations write with the correct `organization_id` (job status
+  advance + time entries, follow-up sends, message sends); Summit cannot see
+  Apex's customers, jobs, invoices, price book, messages, team roster, or
+  search results — and vice versa; unscoped connections read **zero rows**
+  (fail-safe).
+- Helpers (`audit`, `logActivity`, `notify`) self-scope from the session, so
+  every code path — including notification fan-outs — lands in the right
+  tenant.
 
-**Conversion recipe per module** (repeatable, low-risk):
-1. Wrap the module's reads/writes in `withTenant(session.organizationId, …)`.
-2. Add the table(s) to `rls_tables` in `src/db/rls.sql`; run `npm run db:rls`.
+**Recipe for future tables** (new features must follow it):
+1. Give the table an `organization_id` column with the
+   `current_setting('app.current_org')` default; do reads/writes in `withTenant`.
+2. Add it to `rls_tables` in `src/db/rls.sql`; run `npm run db:rls`.
 3. Verify isolation (org A cannot see org B) via a Playwright + SQL check.
 
 ## Core capabilities beyond the trade packs (constraints 3–12)
@@ -121,8 +127,9 @@ conversion completes:
 - **Phase 1 (this pass):** multi-tenant schema + trade packs + RLS spine +
   `withTenant` + 2-org seed + KB module converted & isolation-verified + session
   org + org-aware shell.
-- **Phase 2:** finish the tenancy conversion module-by-module (recipe above);
-  flip RLS on for every core table.
+- **Phase 2 (done):** full tenancy conversion — every module on `withTenant`,
+  FORCE RLS on all 41 tenant tables (incl. users via the auth-function
+  bootstrap), mutation + isolation verification for both seeded orgs.
 - **Phase 3:** typed connector interface (Odoo CRM first) + claims core +
   compliance/inspection engine.
 - **Phase 4:** offline-first implementation + approval-gated egress + AA

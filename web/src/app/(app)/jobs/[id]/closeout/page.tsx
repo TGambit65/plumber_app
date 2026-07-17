@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { asc, eq } from "drizzle-orm";
 import { fmtTime, money, lineTotal } from "@/lib/format";
@@ -62,25 +62,30 @@ function StepCard({
 }
 
 export default async function CloseoutPage({ params }: { params: { id: string } }) {
-  await requireSession();
+  const session = await requireSession();
 
-  const job = await db.query.jobs.findFirst({
-    where: eq(t.jobs.id, params.id),
-    with: {
-      customer: true,
-      photos: true,
-      forms: { orderBy: asc(t.jobForms.name) },
-      invoices: { with: { items: true, payments: true } },
-      activities: true,
-    },
+  const data = await withTenant(session.organizationId, async (tx) => {
+    const job = await tx.query.jobs.findFirst({
+      where: eq(t.jobs.id, params.id),
+      with: {
+        customer: true,
+        photos: true,
+        forms: { orderBy: asc(t.jobForms.name) },
+        invoices: { with: { items: true, payments: true } },
+        activities: true,
+      },
+    });
+    if (!job) return null;
+
+    const priceBook = await tx
+      .select()
+      .from(t.priceBookItems)
+      .where(eq(t.priceBookItems.active, true))
+      .orderBy(asc(t.priceBookItems.category), asc(t.priceBookItems.name));
+    return { job, priceBook };
   });
-  if (!job) notFound();
-
-  const priceBook = await db
-    .select()
-    .from(t.priceBookItems)
-    .where(eq(t.priceBookItems.active, true))
-    .orderBy(asc(t.priceBookItems.category), asc(t.priceBookItems.name));
+  if (!data) notFound();
+  const { job, priceBook } = data;
 
   const beforeCount = job.photos.filter((p) => p.kind === "BEFORE").length;
   const afterCount = job.photos.filter((p) => p.kind === "AFTER").length;

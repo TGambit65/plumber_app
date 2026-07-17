@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { desc } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -32,10 +32,12 @@ export default async function PipelinePage() {
   const session = await requireSession();
   if (!can(session.role, "pipeline.manage")) return <Forbidden />;
 
-  const leads = await db.query.leads.findMany({
-    with: { assignedTo: true },
-    orderBy: [desc(t.leads.createdAt)],
-  });
+  const leads = await withTenant(session.organizationId, (tx) =>
+    tx.query.leads.findMany({
+      with: { assignedTo: true },
+      orderBy: [desc(t.leads.createdAt)],
+    })
+  );
 
   const totalOpen = leads
     .filter((l) => !["WON", "LOST"].includes(l.stage))

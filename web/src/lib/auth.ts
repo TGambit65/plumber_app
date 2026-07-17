@@ -2,8 +2,8 @@ import "server-only";
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
-import { db, t } from "@/db";
-import { eq } from "drizzle-orm";
+import { db } from "@/db";
+import { sql } from "drizzle-orm";
 import { cache } from "react";
 
 const COOKIE = "plumber_session";
@@ -71,9 +71,29 @@ export async function requireSession(): Promise<Session> {
   return session!;
 }
 
+/**
+ * Login bootstrap — the one legitimate cross-tenant read. users is under
+ * FORCE RLS, so this goes through auth_user_by_email(), a SECURITY DEFINER
+ * function (see src/db/rls.sql) that resolves email → user before any tenant
+ * context exists.
+ */
 export async function verifyCredentials(email: string, password: string) {
-  const [user] = await db.select().from(t.users).where(eq(t.users.email, email.toLowerCase().trim()));
-  if (!user || !user.active) return null;
-  const ok = await bcrypt.compare(password, user.passwordHash);
-  return ok ? user : null;
+  const result = await db.execute(
+    sql`select id, email, name, phone, role, password_hash, active, organization_id from auth_user_by_email(${email.toLowerCase().trim()})`
+  );
+  const row = (result.rows?.[0] ?? null) as
+    | { id: string; email: string; name: string; phone: string | null; role: Role; password_hash: string; active: boolean; organization_id: string }
+    | null;
+  if (!row || !row.active) return null;
+  const ok = await bcrypt.compare(password, row.password_hash);
+  if (!ok) return null;
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    phone: row.phone,
+    role: row.role,
+    active: row.active,
+    organizationId: row.organization_id,
+  };
 }

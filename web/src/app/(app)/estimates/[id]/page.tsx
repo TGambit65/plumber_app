@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -54,24 +54,31 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
   const session = await requireSession();
   if (!can(session.role, "estimates.create")) return <Forbidden />;
 
-  const est = await db.query.estimates.findFirst({
-    where: eq(t.estimates.id, params.id),
-    with: {
-      customer: true,
-      property: true,
-      lead: true,
-      job: true,
-      createdBy: true,
-      options: { with: { items: { with: { priceBookItem: true } } } },
-      followUps: true,
-    },
+  const { est, priceBook } = await withTenant(session.organizationId, async (tx) => {
+    const est = await tx.query.estimates.findFirst({
+      where: eq(t.estimates.id, params.id),
+      with: {
+        customer: true,
+        property: true,
+        lead: true,
+        job: true,
+        createdBy: true,
+        options: { with: { items: { with: { priceBookItem: true } } } },
+        followUps: true,
+      },
+    });
+    const priceBook =
+      est && ["DRAFT", "SENT", "VIEWED"].includes(est.status)
+        ? await tx.query.priceBookItems.findMany({
+            where: eq(t.priceBookItems.active, true),
+            orderBy: [t.priceBookItems.category, t.priceBookItems.name],
+          })
+        : [];
+    return { est, priceBook };
   });
   if (!est) notFound();
 
   const editable = ["DRAFT", "SENT", "VIEWED"].includes(est.status);
-  const priceBook = editable
-    ? await db.query.priceBookItems.findMany({ where: eq(t.priceBookItems.active, true), orderBy: [t.priceBookItems.category, t.priceBookItems.name] })
-    : [];
 
   const options = [...est.options].sort((a, b) => a.sortOrder - b.sortOrder);
   const followUps = [...est.followUps].sort((a, b) => new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime());

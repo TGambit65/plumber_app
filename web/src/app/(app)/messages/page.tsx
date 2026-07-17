@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { Card, CardBody, CardHeader, PageHeader, EmptyState, Avatar, Badge } from "@/components/ui";
@@ -12,39 +12,44 @@ export const dynamic = "force-dynamic";
 export default async function MessagesPage() {
   const session = await requireSession();
 
-  const myParts = await db
-    .select({ conversationId: t.conversationParticipants.conversationId, lastReadAt: t.conversationParticipants.lastReadAt })
-    .from(t.conversationParticipants)
-    .where(eq(t.conversationParticipants.userId, session.userId));
-  const convoIds = myParts.map((p) => p.conversationId);
-  const lastRead = new Map(myParts.map((p) => [p.conversationId, p.lastReadAt?.getTime() ?? 0]));
+  // All page queries run in ONE tenant-scoped transaction.
+  const { convos, unreadByConvo, others } = await withTenant(session.organizationId, async (tx) => {
+    const myParts = await tx
+      .select({ conversationId: t.conversationParticipants.conversationId, lastReadAt: t.conversationParticipants.lastReadAt })
+      .from(t.conversationParticipants)
+      .where(eq(t.conversationParticipants.userId, session.userId));
+    const convoIds = myParts.map((p) => p.conversationId);
+    const lastRead = new Map(myParts.map((p) => [p.conversationId, p.lastReadAt?.getTime() ?? 0]));
 
-  const convos = convoIds.length
-    ? await db.query.conversations.findMany({
-        where: inArray(t.conversations.id, convoIds),
-        with: { participants: { with: { user: true } }, messages: { orderBy: [desc(t.messages.createdAt)], limit: 1 } },
-        orderBy: [desc(t.conversations.lastMessageAt)],
-      })
-    : [];
+    const convosRows = convoIds.length
+      ? await tx.query.conversations.findMany({
+          where: inArray(t.conversations.id, convoIds),
+          with: { participants: { with: { user: true } }, messages: { orderBy: [desc(t.messages.createdAt)], limit: 1 } },
+          orderBy: [desc(t.conversations.lastMessageAt)],
+        })
+      : [];
 
-  // Unread counts per conversation.
-  const unreadByConvo = new Map<string, number>();
-  if (convoIds.length) {
-    const msgs = await db
-      .select({ conversationId: t.messages.conversationId, createdAt: t.messages.createdAt })
-      .from(t.messages)
-      .where(and(inArray(t.messages.conversationId, convoIds), ne(t.messages.senderId, session.userId)));
-    for (const m of msgs) {
-      if (m.createdAt.getTime() > (lastRead.get(m.conversationId) ?? 0)) {
-        unreadByConvo.set(m.conversationId, (unreadByConvo.get(m.conversationId) ?? 0) + 1);
+    // Unread counts per conversation.
+    const unread = new Map<string, number>();
+    if (convoIds.length) {
+      const msgs = await tx
+        .select({ conversationId: t.messages.conversationId, createdAt: t.messages.createdAt })
+        .from(t.messages)
+        .where(and(inArray(t.messages.conversationId, convoIds), ne(t.messages.senderId, session.userId)));
+      for (const m of msgs) {
+        if (m.createdAt.getTime() > (lastRead.get(m.conversationId) ?? 0)) {
+          unread.set(m.conversationId, (unread.get(m.conversationId) ?? 0) + 1);
+        }
       }
     }
-  }
 
-  const others = await db
-    .select({ id: t.users.id, name: t.users.name, role: t.users.role })
-    .from(t.users)
-    .where(and(ne(t.users.id, session.userId), eq(t.users.active, true)));
+    const othersRows = await tx
+      .select({ id: t.users.id, name: t.users.name, role: t.users.role })
+      .from(t.users)
+      .where(and(ne(t.users.id, session.userId), eq(t.users.active, true)));
+
+    return { convos: convosRows, unreadByConvo: unread, others: othersRows };
+  });
 
   return (
     <div className="mx-auto max-w-3xl">

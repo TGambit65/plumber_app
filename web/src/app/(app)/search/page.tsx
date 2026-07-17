@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t, withTenant } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { desc, ilike, or, sql } from "drizzle-orm";
 import { Badge, Button, Card, CardBody, CardHeader, EmptyState, Input, PageHeader } from "@/components/ui";
@@ -62,65 +62,67 @@ export default async function SearchPage({ searchParams }: { searchParams: { q?:
 
   const like = `%${q}%`;
 
-  const [customers, properties, jobs, estimates, invoices, pbItems, kb, leads] = await Promise.all([
-    db
-      .select()
-      .from(t.customers)
-      .where(
-        or(
-          ilike(t.customers.name, like),
-          ilike(t.customers.company, like),
-          ilike(t.customers.phone, like),
-          ilike(t.customers.email, like)
-        )
-      )
-      .limit(FETCH_LIMIT),
-    db.query.properties.findMany({
-      where: or(ilike(t.properties.address, like), ilike(t.properties.label, like)),
-      with: { customer: true },
-      limit: FETCH_LIMIT,
-    }),
-    db.query.jobs.findMany({
-      where: or(ilike(t.jobs.number, like), ilike(t.jobs.jobType, like)),
-      with: { customer: true },
-      orderBy: [desc(t.jobs.createdAt)],
-      limit: FETCH_LIMIT,
-    }),
-    db.query.estimates.findMany({
-      where: ilike(t.estimates.number, like),
-      with: { customer: true },
-      limit: FETCH_LIMIT,
-    }),
-    db.query.invoices.findMany({
-      where: ilike(t.invoices.number, like),
-      with: { customer: true },
-      limit: FETCH_LIMIT,
-    }),
-    db
-      .select()
-      .from(t.priceBookItems)
-      .where(or(ilike(t.priceBookItems.code, like), ilike(t.priceBookItems.name, like)))
-      .limit(FETCH_LIMIT),
-    // kb_articles is RLS-enabled → must run inside the tenant transaction.
-    withTenant(session.organizationId, (tx) =>
-      tx
-        .select()
-        .from(t.kbArticles)
-        .where(
-          or(
-            ilike(t.kbArticles.title, like),
-            ilike(t.kbArticles.body, like),
-            sql`array_to_string(${t.kbArticles.tags}, ' ') ilike ${like}`
+  // All facets run inside ONE tenant-scoped transaction (RLS filters every read).
+  const [customers, properties, jobs, estimates, invoices, pbItems, kb, leads] = await withTenant(
+    session.organizationId,
+    (tx) =>
+      Promise.all([
+        tx
+          .select()
+          .from(t.customers)
+          .where(
+            or(
+              ilike(t.customers.name, like),
+              ilike(t.customers.company, like),
+              ilike(t.customers.phone, like),
+              ilike(t.customers.email, like)
+            )
           )
-        )
-        .limit(FETCH_LIMIT)
-    ),
-    db
-      .select()
-      .from(t.leads)
-      .where(or(ilike(t.leads.title, like), ilike(t.leads.contactName, like)))
-      .limit(FETCH_LIMIT),
-  ]);
+          .limit(FETCH_LIMIT),
+        tx.query.properties.findMany({
+          where: or(ilike(t.properties.address, like), ilike(t.properties.label, like)),
+          with: { customer: true },
+          limit: FETCH_LIMIT,
+        }),
+        tx.query.jobs.findMany({
+          where: or(ilike(t.jobs.number, like), ilike(t.jobs.jobType, like)),
+          with: { customer: true },
+          orderBy: [desc(t.jobs.createdAt)],
+          limit: FETCH_LIMIT,
+        }),
+        tx.query.estimates.findMany({
+          where: ilike(t.estimates.number, like),
+          with: { customer: true },
+          limit: FETCH_LIMIT,
+        }),
+        tx.query.invoices.findMany({
+          where: ilike(t.invoices.number, like),
+          with: { customer: true },
+          limit: FETCH_LIMIT,
+        }),
+        tx
+          .select()
+          .from(t.priceBookItems)
+          .where(or(ilike(t.priceBookItems.code, like), ilike(t.priceBookItems.name, like)))
+          .limit(FETCH_LIMIT),
+        tx
+          .select()
+          .from(t.kbArticles)
+          .where(
+            or(
+              ilike(t.kbArticles.title, like),
+              ilike(t.kbArticles.body, like),
+              sql`array_to_string(${t.kbArticles.tags}, ' ') ilike ${like}`
+            )
+          )
+          .limit(FETCH_LIMIT),
+        tx
+          .select()
+          .from(t.leads)
+          .where(or(ilike(t.leads.title, like), ilike(t.leads.contactName, like)))
+          .limit(FETCH_LIMIT),
+      ])
+  );
 
   const total =
     customers.length +

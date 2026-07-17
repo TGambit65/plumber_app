@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { and, asc, eq } from "drizzle-orm";
 import { Avatar, Badge } from "@/components/ui";
@@ -14,18 +14,24 @@ export const dynamic = "force-dynamic";
 export default async function ThreadPage({ params }: { params: { id: string } }) {
   const session = await requireSession();
 
-  const [membership] = await db
-    .select({ id: t.conversationParticipants.id })
-    .from(t.conversationParticipants)
-    .where(and(eq(t.conversationParticipants.conversationId, params.id), eq(t.conversationParticipants.userId, session.userId)));
-  if (!membership) notFound();
+  // All page queries run in ONE tenant-scoped transaction; notFound() is called
+  // outside so it doesn't abort the transaction machinery mid-flight.
+  const convo = await withTenant(session.organizationId, async (tx) => {
+    const [membership] = await tx
+      .select({ id: t.conversationParticipants.id })
+      .from(t.conversationParticipants)
+      .where(and(eq(t.conversationParticipants.conversationId, params.id), eq(t.conversationParticipants.userId, session.userId)));
+    if (!membership) return null;
 
-  const convo = await db.query.conversations.findFirst({
-    where: eq(t.conversations.id, params.id),
-    with: {
-      participants: { with: { user: true } },
-      messages: { with: { sender: true }, orderBy: [asc(t.messages.createdAt)] },
-    },
+    return (
+      (await tx.query.conversations.findFirst({
+        where: eq(t.conversations.id, params.id),
+        with: {
+          participants: { with: { user: true } },
+          messages: { with: { sender: true }, orderBy: [asc(t.messages.createdAt)] },
+        },
+      })) ?? null
+    );
   });
   if (!convo) notFound();
 

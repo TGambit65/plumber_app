@@ -4,7 +4,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { db, t } from "@/db";
+import { t, withTenant, type TenantDb } from "@/db";
 import { and, eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can, type Permission } from "@/lib/permissions";
@@ -34,13 +34,14 @@ function currentPeriod(): string {
   return new Date().toISOString().slice(0, 7);
 }
 
-async function nextDocNumber(prefix: string, kind: "estimates" | "jobs" | "invoices"): Promise<string> {
+/** Per-org number sequence — must run inside the caller's withTenant transaction. */
+async function nextDocNumber(tx: TenantDb, prefix: string, kind: "estimates" | "jobs" | "invoices"): Promise<string> {
   const rows =
     kind === "estimates"
-      ? await db.select({ n: t.estimates.number }).from(t.estimates)
+      ? await tx.select({ n: t.estimates.number }).from(t.estimates)
       : kind === "jobs"
-        ? await db.select({ n: t.jobs.number }).from(t.jobs)
-        : await db.select({ n: t.invoices.number }).from(t.invoices);
+        ? await tx.select({ n: t.jobs.number }).from(t.jobs)
+        : await tx.select({ n: t.invoices.number }).from(t.invoices);
   let max = 1000;
   for (const r of rows) {
     const m = /(\d+)$/.exec(r.n);
@@ -69,15 +70,16 @@ function revalidateSales(leadId?: string, estimateId?: string) {
   if (estimateId) revalidatePath(`/estimates/${estimateId}`);
 }
 
-/** Core stage transition shared by lead detail buttons & pipeline board. */
-async function applyLeadStage(leadId: string, stage: Stage, userId: string, lostReason?: string) {
-  const lead = await db.query.leads.findFirst({ where: eq(t.leads.id, leadId) });
+/** Core stage transition shared by lead detail buttons & pipeline board.
+ *  Must run inside the caller's withTenant transaction. */
+async function applyLeadStage(tx: TenantDb, leadId: string, stage: Stage, userId: string, lostReason?: string) {
+  const lead = await tx.query.leads.findFirst({ where: eq(t.leads.id, leadId) });
   if (!lead) throw new Error("Lead not found");
   const now = new Date();
   const patch: Partial<typeof t.leads.$inferInsert> = { stage, lastContactAt: now };
   if (stage === "CONTACTED" && !lead.firstTouchAt) patch.firstTouchAt = now;
   if (stage === "LOST") patch.lostReason = lostReason || lead.lostReason || "No reason recorded";
-  await db.update(t.leads).set(patch).where(eq(t.leads.id, leadId));
+  await tx.update(t.leads).set(patch).where(eq(t.leads.id, leadId));
   await logActivity({
     kind: "STATUS",
     body:
@@ -100,23 +102,25 @@ export async function createLead(formData: FormData) {
   const source = (str(formData, "source") || "PHONE") as (typeof t.leads.$inferInsert)["source"];
   const assignedToId = str(formData, "assignedToId") || null;
 
-  const [lead] = await db
-    .insert(t.leads)
-    .values({
-      title,
-      contactName,
-      phone: str(formData, "phone") || null,
-      email: str(formData, "email") || null,
-      description: str(formData, "description") || null,
-      source,
-      stage: "NEW",
-      estValueCents: dollarsToCents(formData, "estValue"),
-      assignedToId,
-      createdById: session.userId,
-      // Speed-to-lead SLA: respond within 30 minutes.
-      respondBy: new Date(Date.now() + 30 * 60 * 1000),
-    })
-    .returning();
+  const [lead] = await withTenant(session.organizationId, (tx) =>
+    tx
+      .insert(t.leads)
+      .values({
+        title,
+        contactName,
+        phone: str(formData, "phone") || null,
+        email: str(formData, "email") || null,
+        description: str(formData, "description") || null,
+        source,
+        stage: "NEW",
+        estValueCents: dollarsToCents(formData, "estValue"),
+        assignedToId,
+        createdById: session.userId,
+        // Speed-to-lead SLA: respond within 30 minutes.
+        respondBy: new Date(Date.now() + 30 * 60 * 1000),
+      })
+      .returning()
+  );
 
   await logActivity({
     kind: "SYSTEM",
@@ -138,7 +142,9 @@ export async function setLeadStage(formData: FormData) {
   if (!STAGE_ORDER.includes(stage)) throw new Error("Invalid stage");
   const lostReason = str(formData, "lostReason");
   if (stage === "LOST" && !lostReason) throw new Error("A lost reason is required");
-  await applyLeadStage(leadId, stage, session.userId, lostReason || undefined);
+  await withTenant(session.organizationId, (tx) =>
+    applyLeadStage(tx, leadId, stage, session.userId, lostReason || undefined)
+  );
   revalidateSales(leadId);
 }
 
@@ -147,12 +153,14 @@ export async function moveLeadStage(formData: FormData) {
   const session = await guard("pipeline.manage");
   const leadId = str(formData, "leadId");
   const dir = str(formData, "dir") === "-1" ? -1 : 1;
-  const lead = await db.query.leads.findFirst({ where: eq(t.leads.id, leadId) });
-  if (!lead) throw new Error("Lead not found");
-  const idx = STAGE_ORDER.indexOf(lead.stage as Stage);
-  const next = STAGE_ORDER[Math.min(STAGE_ORDER.length - 1, Math.max(0, idx + dir))];
-  if (next === lead.stage) return;
-  await applyLeadStage(leadId, next, session.userId, next === "LOST" ? "Moved to Lost on pipeline board" : undefined);
+  await withTenant(session.organizationId, async (tx) => {
+    const lead = await tx.query.leads.findFirst({ where: eq(t.leads.id, leadId) });
+    if (!lead) throw new Error("Lead not found");
+    const idx = STAGE_ORDER.indexOf(lead.stage as Stage);
+    const next = STAGE_ORDER[Math.min(STAGE_ORDER.length - 1, Math.max(0, idx + dir))];
+    if (next === lead.stage) return;
+    await applyLeadStage(tx, leadId, next, session.userId, next === "LOST" ? "Moved to Lost on pipeline board" : undefined);
+  });
   revalidateSales(leadId);
 }
 
@@ -161,7 +169,9 @@ export async function addLeadNote(formData: FormData) {
   const leadId = str(formData, "leadId");
   const body = str(formData, "body");
   if (!body) return;
-  const lead = await db.query.leads.findFirst({ where: eq(t.leads.id, leadId) });
+  const lead = await withTenant(session.organizationId, (tx) =>
+    tx.query.leads.findFirst({ where: eq(t.leads.id, leadId) })
+  );
   if (!lead) throw new Error("Lead not found");
   await logActivity({ kind: "NOTE", body, userId: session.userId, leadId, customerId: lead.customerId ?? undefined });
   revalidatePath(`/leads/${leadId}`);
@@ -171,40 +181,45 @@ export async function addLeadNote(formData: FormData) {
 export async function convertLeadToEstimate(formData: FormData) {
   const session = await guard("estimates.create");
   const leadId = str(formData, "leadId");
-  const lead = await db.query.leads.findFirst({ where: eq(t.leads.id, leadId), with: { customer: true } });
-  if (!lead) throw new Error("Lead not found");
 
-  const customerId = lead.customerId ?? str(formData, "customerId");
-  if (!customerId) throw new Error("Pick a customer to create the estimate against");
-  let propertyId = lead.propertyId;
-  if (!propertyId) {
-    const prop = await db.query.properties.findFirst({ where: eq(t.properties.customerId, customerId) });
-    propertyId = prop?.id ?? null;
-  }
+  const { lead, estimate, number, customerId } = await withTenant(session.organizationId, async (tx) => {
+    const lead = await tx.query.leads.findFirst({ where: eq(t.leads.id, leadId), with: { customer: true } });
+    if (!lead) throw new Error("Lead not found");
 
-  const number = await nextDocNumber("E", "estimates");
-  const [estimate] = await db
-    .insert(t.estimates)
-    .values({
-      number,
-      status: "DRAFT",
-      customerId,
-      propertyId,
-      leadId: lead.id,
-      createdById: session.userId,
-      notes: lead.title,
-    })
-    .returning();
+    const customerId = lead.customerId ?? str(formData, "customerId");
+    if (!customerId) throw new Error("Pick a customer to create the estimate against");
+    let propertyId = lead.propertyId;
+    if (!propertyId) {
+      const prop = await tx.query.properties.findFirst({ where: eq(t.properties.customerId, customerId) });
+      propertyId = prop?.id ?? null;
+    }
 
-  await db.insert(t.estimateOptions).values([
-    { estimateId: estimate.id, tier: "GOOD", name: "Good", description: "Gets the job done", sortOrder: 0 },
-    { estimateId: estimate.id, tier: "BETTER", name: "Better", description: "Our most popular package", sortOrder: 1 },
-    { estimateId: estimate.id, tier: "BEST", name: "Best", description: "Top-of-the-line, longest warranty", sortOrder: 2 },
-  ]);
+    const number = await nextDocNumber(tx, "E", "estimates");
+    const [estimate] = await tx
+      .insert(t.estimates)
+      .values({
+        number,
+        status: "DRAFT",
+        customerId,
+        propertyId,
+        leadId: lead.id,
+        createdById: session.userId,
+        notes: lead.title,
+      })
+      .returning();
 
-  if (!lead.customerId) {
-    await db.update(t.leads).set({ customerId }).where(eq(t.leads.id, lead.id));
-  }
+    await tx.insert(t.estimateOptions).values([
+      { estimateId: estimate.id, tier: "GOOD", name: "Good", description: "Gets the job done", sortOrder: 0 },
+      { estimateId: estimate.id, tier: "BETTER", name: "Better", description: "Our most popular package", sortOrder: 1 },
+      { estimateId: estimate.id, tier: "BEST", name: "Best", description: "Top-of-the-line, longest warranty", sortOrder: 2 },
+    ]);
+
+    if (!lead.customerId) {
+      await tx.update(t.leads).set({ customerId }).where(eq(t.leads.id, lead.id));
+    }
+    return { lead, estimate, number, customerId };
+  });
+
   await logActivity({
     kind: "SYSTEM",
     body: `Estimate ${number} created from lead "${lead.title}"`,
@@ -221,9 +236,12 @@ export async function convertLeadToEstimate(formData: FormData) {
 export async function markFollowUpSent(formData: FormData) {
   const session = await requireSession();
   const id = str(formData, "followUpId");
-  const fu = await db.query.followUps.findFirst({ where: eq(t.followUps.id, id), with: { estimate: true } });
-  if (!fu) throw new Error("Follow-up not found");
-  await db.update(t.followUps).set({ status: "SENT", sentAt: new Date() }).where(eq(t.followUps.id, id));
+  const fu = await withTenant(session.organizationId, async (tx) => {
+    const fu = await tx.query.followUps.findFirst({ where: eq(t.followUps.id, id), with: { estimate: true } });
+    if (!fu) throw new Error("Follow-up not found");
+    await tx.update(t.followUps).set({ status: "SENT", sentAt: new Date() }).where(eq(t.followUps.id, id));
+    return fu;
+  });
   const kind = fu.channel === "SMS" ? "SMS" : fu.channel === "EMAIL" ? "EMAIL" : "CALL";
   await logActivity({
     kind,
@@ -236,77 +254,92 @@ export async function markFollowUpSent(formData: FormData) {
 }
 
 export async function skipFollowUp(formData: FormData) {
-  await requireSession();
+  const session = await requireSession();
   const id = str(formData, "followUpId");
-  const fu = await db.query.followUps.findFirst({ where: eq(t.followUps.id, id), with: { estimate: true } });
-  if (!fu) throw new Error("Follow-up not found");
-  await db.update(t.followUps).set({ status: "SKIPPED" }).where(eq(t.followUps.id, id));
+  const fu = await withTenant(session.organizationId, async (tx) => {
+    const fu = await tx.query.followUps.findFirst({ where: eq(t.followUps.id, id), with: { estimate: true } });
+    if (!fu) throw new Error("Follow-up not found");
+    await tx.update(t.followUps).set({ status: "SKIPPED" }).where(eq(t.followUps.id, id));
+    return fu;
+  });
   revalidateSales(fu.leadId ?? fu.estimate?.leadId ?? undefined, fu.estimateId ?? undefined);
 }
 
 // ── Estimates: option & line-item editing ───────────────────────────────────
 
 export async function addEstimateOption(formData: FormData) {
-  await guard("estimates.create");
+  const session = await guard("estimates.create");
   const estimateId = str(formData, "estimateId");
   const tier = (str(formData, "tier") || "CUSTOM") as (typeof t.estimateOptions.$inferInsert)["tier"];
-  const existing = await db.query.estimateOptions.findMany({ where: eq(t.estimateOptions.estimateId, estimateId) });
   const name = str(formData, "name") || tier.charAt(0) + tier.slice(1).toLowerCase();
-  await db.insert(t.estimateOptions).values({ estimateId, tier, name, sortOrder: existing.length });
+  await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.estimateOptions.findMany({ where: eq(t.estimateOptions.estimateId, estimateId) });
+    await tx.insert(t.estimateOptions).values({ estimateId, tier, name, sortOrder: existing.length });
+  });
   revalidatePath(`/estimates/${estimateId}`);
 }
 
 export async function addLineItem(formData: FormData) {
-  await guard("estimates.create");
+  const session = await guard("estimates.create");
   const optionId = str(formData, "optionId");
   const priceBookItemId = str(formData, "priceBookItemId");
   if (!priceBookItemId) throw new Error("Pick a price book item");
-  const option = await db.query.estimateOptions.findFirst({ where: eq(t.estimateOptions.id, optionId) });
-  const item = await db.query.priceBookItems.findFirst({ where: eq(t.priceBookItems.id, priceBookItemId) });
-  if (!option || !item) throw new Error("Not found");
   const qty = Number(str(formData, "qty") || "1") || 1;
   const override = dollarsToCents(formData, "priceOverride");
-  await db.insert(t.estimateLineItems).values({
-    optionId,
-    priceBookItemId,
-    description: item.name,
-    qty,
-    unitPriceCents: override ?? item.unitPriceCents,
-    unitCostCents: item.unitCostCents,
+  const estimateId = await withTenant(session.organizationId, async (tx) => {
+    const option = await tx.query.estimateOptions.findFirst({ where: eq(t.estimateOptions.id, optionId) });
+    const item = await tx.query.priceBookItems.findFirst({ where: eq(t.priceBookItems.id, priceBookItemId) });
+    if (!option || !item) throw new Error("Not found");
+    await tx.insert(t.estimateLineItems).values({
+      optionId,
+      priceBookItemId,
+      description: item.name,
+      qty,
+      unitPriceCents: override ?? item.unitPriceCents,
+      unitCostCents: item.unitCostCents,
+    });
+    return option.estimateId;
   });
-  revalidatePath(`/estimates/${option.estimateId}`);
+  revalidatePath(`/estimates/${estimateId}`);
 }
 
 export async function updateLineItem(formData: FormData) {
-  await guard("estimates.create");
+  const session = await guard("estimates.create");
   const itemId = str(formData, "itemId");
-  const row = await db.query.estimateLineItems.findFirst({
-    where: eq(t.estimateLineItems.id, itemId),
-    with: { option: true },
-  });
-  if (!row) throw new Error("Line item not found");
   const qty = Number(str(formData, "qty"));
   const price = dollarsToCents(formData, "price");
-  await db
-    .update(t.estimateLineItems)
-    .set({
-      qty: Number.isFinite(qty) && qty > 0 ? qty : row.qty,
-      unitPriceCents: price ?? row.unitPriceCents,
-    })
-    .where(eq(t.estimateLineItems.id, itemId));
-  revalidatePath(`/estimates/${row.option.estimateId}`);
+  const estimateId = await withTenant(session.organizationId, async (tx) => {
+    const row = await tx.query.estimateLineItems.findFirst({
+      where: eq(t.estimateLineItems.id, itemId),
+      with: { option: true },
+    });
+    if (!row) throw new Error("Line item not found");
+    await tx
+      .update(t.estimateLineItems)
+      .set({
+        qty: Number.isFinite(qty) && qty > 0 ? qty : row.qty,
+        unitPriceCents: price ?? row.unitPriceCents,
+      })
+      .where(eq(t.estimateLineItems.id, itemId));
+    return row.option.estimateId;
+  });
+  revalidatePath(`/estimates/${estimateId}`);
 }
 
 export async function removeLineItem(formData: FormData) {
-  await guard("estimates.create");
+  const session = await guard("estimates.create");
   const itemId = str(formData, "itemId");
-  const row = await db.query.estimateLineItems.findFirst({
-    where: eq(t.estimateLineItems.id, itemId),
-    with: { option: true },
+  const estimateId = await withTenant(session.organizationId, async (tx) => {
+    const row = await tx.query.estimateLineItems.findFirst({
+      where: eq(t.estimateLineItems.id, itemId),
+      with: { option: true },
+    });
+    if (!row) return null;
+    await tx.delete(t.estimateLineItems).where(eq(t.estimateLineItems.id, itemId));
+    return row.option.estimateId;
   });
-  if (!row) return;
-  await db.delete(t.estimateLineItems).where(eq(t.estimateLineItems.id, itemId));
-  revalidatePath(`/estimates/${row.option.estimateId}`);
+  if (!estimateId) return;
+  revalidatePath(`/estimates/${estimateId}`);
 }
 
 // ── Estimates: lifecycle ─────────────────────────────────────────────────────
@@ -328,26 +361,30 @@ function followUpCadence(estimateNumber: string, contact: string): { day: number
 export async function markEstimateSent(formData: FormData) {
   const session = await guard("estimates.create");
   const estimateId = str(formData, "estimateId");
-  const est = await db.query.estimates.findFirst({
-    where: eq(t.estimates.id, estimateId),
-    with: { customer: true, lead: true },
+  const est = await withTenant(session.organizationId, async (tx) => {
+    const est = await tx.query.estimates.findFirst({
+      where: eq(t.estimates.id, estimateId),
+      with: { customer: true, lead: true },
+    });
+    if (!est) throw new Error("Estimate not found");
+    const now = new Date();
+    await tx.update(t.estimates).set({ status: "SENT", sentAt: now }).where(eq(t.estimates.id, estimateId));
+
+    // Default-on follow-up automation: 7 touches over 7 days.
+    const cadence = followUpCadence(est.number, est.lead?.contactName ?? est.customer.name);
+    await tx.insert(t.followUps).values(
+      cadence.map((c) => {
+        const dueAt = new Date(now);
+        dueAt.setDate(dueAt.getDate() + c.day);
+        dueAt.setHours(c.hour, 0, 0, 0);
+        return { estimateId, channel: c.channel, status: "PENDING" as const, dueAt, body: c.body };
+      })
+    );
+
+    if (est.leadId) await applyLeadStage(tx, est.leadId, "ESTIMATE_SENT", session.userId);
+    return est;
   });
-  if (!est) throw new Error("Estimate not found");
-  const now = new Date();
-  await db.update(t.estimates).set({ status: "SENT", sentAt: now }).where(eq(t.estimates.id, estimateId));
 
-  // Default-on follow-up automation: 7 touches over 7 days.
-  const cadence = followUpCadence(est.number, est.lead?.contactName ?? est.customer.name);
-  await db.insert(t.followUps).values(
-    cadence.map((c) => {
-      const dueAt = new Date(now);
-      dueAt.setDate(dueAt.getDate() + c.day);
-      dueAt.setHours(c.hour, 0, 0, 0);
-      return { estimateId, channel: c.channel, status: "PENDING" as const, dueAt, body: c.body };
-    })
-  );
-
-  if (est.leadId) await applyLeadStage(est.leadId, "ESTIMATE_SENT", session.userId);
   await logActivity({
     kind: "SYSTEM",
     body: `Estimate ${est.number} sent to ${est.customer.name} — 7-day follow-up sequence started (5 SMS + 2 email)`,
@@ -360,19 +397,22 @@ export async function markEstimateSent(formData: FormData) {
 
 /** Demo hook: simulate the customer opening their proposal link. */
 export async function recordEstimateView(formData: FormData) {
-  await requireSession();
+  const session = await requireSession();
   const estimateId = str(formData, "estimateId");
-  const est = await db.query.estimates.findFirst({ where: eq(t.estimates.id, estimateId), with: { customer: true } });
-  if (!est) throw new Error("Estimate not found");
-  const views = est.viewCount + 1;
-  await db
-    .update(t.estimates)
-    .set({
-      viewCount: views,
-      lastViewedAt: new Date(),
-      status: est.status === "SENT" || est.status === "VIEWED" ? "VIEWED" : est.status,
-    })
-    .where(eq(t.estimates.id, estimateId));
+  const { est, views } = await withTenant(session.organizationId, async (tx) => {
+    const est = await tx.query.estimates.findFirst({ where: eq(t.estimates.id, estimateId), with: { customer: true } });
+    if (!est) throw new Error("Estimate not found");
+    const views = est.viewCount + 1;
+    await tx
+      .update(t.estimates)
+      .set({
+        viewCount: views,
+        lastViewedAt: new Date(),
+        status: est.status === "SENT" || est.status === "VIEWED" ? "VIEWED" : est.status,
+      })
+      .where(eq(t.estimates.id, estimateId));
+    return { est, views };
+  });
   await logActivity({
     kind: "ESTIMATE_VIEW",
     body: `${est.customer.name} viewed estimate ${est.number} (view #${views})`,
@@ -399,63 +439,67 @@ export async function approveEstimate(formData: FormData) {
   if (!optionId) throw new Error("Select an option to approve");
   if (!signedName) throw new Error("Signed name is required for e-signature");
 
-  const est = await db.query.estimates.findFirst({
-    where: eq(t.estimates.id, estimateId),
-    with: { options: { with: { items: true } }, customer: { with: { properties: true } } },
-  });
-  if (!est) throw new Error("Estimate not found");
-  if (est.status === "APPROVED") throw new Error("Estimate already approved");
-  const option = est.options.find((o) => o.id === optionId);
-  if (!option) throw new Error("Option not found");
+  const { est, option, total, commissionCents } = await withTenant(session.organizationId, async (tx) => {
+    const est = await tx.query.estimates.findFirst({
+      where: eq(t.estimates.id, estimateId),
+      with: { options: { with: { items: true } }, customer: { with: { properties: true } } },
+    });
+    if (!est) throw new Error("Estimate not found");
+    if (est.status === "APPROVED") throw new Error("Estimate already approved");
+    const option = est.options.find((o) => o.id === optionId);
+    if (!option) throw new Error("Option not found");
 
-  const total = lineTotal(option.items);
-  const now = new Date();
+    const total = lineTotal(option.items);
+    const now = new Date();
 
-  await db.update(t.estimateOptions).set({ selected: false }).where(eq(t.estimateOptions.estimateId, estimateId));
-  await db.update(t.estimateOptions).set({ selected: true }).where(eq(t.estimateOptions.id, optionId));
-  await db
-    .update(t.estimates)
-    .set({ status: "APPROVED", signedName, signedAt: now })
-    .where(eq(t.estimates.id, estimateId));
+    await tx.update(t.estimateOptions).set({ selected: false }).where(eq(t.estimateOptions.estimateId, estimateId));
+    await tx.update(t.estimateOptions).set({ selected: true }).where(eq(t.estimateOptions.id, optionId));
+    await tx
+      .update(t.estimates)
+      .set({ status: "APPROVED", signedName, signedAt: now })
+      .where(eq(t.estimates.id, estimateId));
 
-  // 5% of sold revenue for the estimate creator.
-  const commissionCents = Math.round(total * 0.05);
-  await db.insert(t.commissionEntries).values({
-    userId: est.createdById,
-    description: `${est.number} approved — ${est.customer.name}, "${option.name}" (5% of ${money(total)})`,
-    amountCents: commissionCents,
-    period: currentPeriod(),
-    status: "PENDING",
-    sourceType: "ESTIMATE",
-    sourceId: est.id,
-  });
+    // 5% of sold revenue for the estimate creator.
+    const commissionCents = Math.round(total * 0.05);
+    await tx.insert(t.commissionEntries).values({
+      userId: est.createdById,
+      description: `${est.number} approved — ${est.customer.name}, "${option.name}" (5% of ${money(total)})`,
+      amountCents: commissionCents,
+      period: currentPeriod(),
+      status: "PENDING",
+      sourceType: "ESTIMATE",
+      sourceId: est.id,
+    });
 
-  // Create the sold job if none is linked yet.
-  if (!est.jobId) {
-    const propertyId = est.propertyId ?? est.customer.properties[0]?.id ?? null;
-    if (propertyId) {
-      const jobNumber = await nextDocNumber("J", "jobs");
-      const [job] = await db
-        .insert(t.jobs)
-        .values({
-          number: jobNumber,
-          status: "UNSCHEDULED",
-          jobType: est.notes?.split("\n")[0]?.slice(0, 80) || "Sold work",
-          description: `Sold via estimate ${est.number} — option "${option.name}" (${money(total)})`,
-          customerId: est.customerId,
-          propertyId,
-        })
-        .returning();
-      await db.update(t.estimates).set({ jobId: job.id }).where(eq(t.estimates.id, estimateId));
+    // Create the sold job if none is linked yet.
+    if (!est.jobId) {
+      const propertyId = est.propertyId ?? est.customer.properties[0]?.id ?? null;
+      if (propertyId) {
+        const jobNumber = await nextDocNumber(tx, "J", "jobs");
+        const [job] = await tx
+          .insert(t.jobs)
+          .values({
+            number: jobNumber,
+            status: "UNSCHEDULED",
+            jobType: est.notes?.split("\n")[0]?.slice(0, 80) || "Sold work",
+            description: `Sold via estimate ${est.number} — option "${option.name}" (${money(total)})`,
+            customerId: est.customerId,
+            propertyId,
+          })
+          .returning();
+        await tx.update(t.estimates).set({ jobId: job.id }).where(eq(t.estimates.id, estimateId));
+      }
     }
-  }
 
-  // Auto-stop the follow-up sequence and mark the lead won.
-  await db
-    .update(t.followUps)
-    .set({ status: "SKIPPED" })
-    .where(and(eq(t.followUps.estimateId, estimateId), eq(t.followUps.status, "PENDING")));
-  if (est.leadId) await applyLeadStage(est.leadId, "WON", session.userId);
+    // Auto-stop the follow-up sequence and mark the lead won.
+    await tx
+      .update(t.followUps)
+      .set({ status: "SKIPPED" })
+      .where(and(eq(t.followUps.estimateId, estimateId), eq(t.followUps.status, "PENDING")));
+    if (est.leadId) await applyLeadStage(tx, est.leadId, "WON", session.userId);
+
+    return { est, option, total, commissionCents };
+  });
 
   await logActivity({
     kind: "STATUS",
@@ -483,14 +527,17 @@ export async function declineEstimate(formData: FormData) {
   const session = await guard("estimates.create");
   const estimateId = str(formData, "estimateId");
   const reason = str(formData, "reason") || "No reason given";
-  const est = await db.query.estimates.findFirst({ where: eq(t.estimates.id, estimateId), with: { customer: true } });
-  if (!est) throw new Error("Estimate not found");
-  await db.update(t.estimates).set({ status: "DECLINED" }).where(eq(t.estimates.id, estimateId));
-  await db
-    .update(t.followUps)
-    .set({ status: "SKIPPED" })
-    .where(and(eq(t.followUps.estimateId, estimateId), eq(t.followUps.status, "PENDING")));
-  if (est.leadId) await applyLeadStage(est.leadId, "LOST", session.userId, reason);
+  const est = await withTenant(session.organizationId, async (tx) => {
+    const est = await tx.query.estimates.findFirst({ where: eq(t.estimates.id, estimateId), with: { customer: true } });
+    if (!est) throw new Error("Estimate not found");
+    await tx.update(t.estimates).set({ status: "DECLINED" }).where(eq(t.estimates.id, estimateId));
+    await tx
+      .update(t.followUps)
+      .set({ status: "SKIPPED" })
+      .where(and(eq(t.followUps.estimateId, estimateId), eq(t.followUps.status, "PENDING")));
+    if (est.leadId) await applyLeadStage(tx, est.leadId, "LOST", session.userId, reason);
+    return est;
+  });
   await logActivity({
     kind: "STATUS",
     body: `Estimate ${est.number} declined — ${reason}`,
@@ -507,21 +554,24 @@ export async function setMilestoneStatus(formData: FormData) {
   const session = await guard("projects.manage");
   const milestoneId = str(formData, "milestoneId");
   const to = str(formData, "to") as (typeof t.milestones.$inferSelect)["status"];
-  const ms = await db.query.milestones.findFirst({ where: eq(t.milestones.id, milestoneId), with: { project: true } });
-  if (!ms) throw new Error("Milestone not found");
+  const { ms, note } = await withTenant(session.organizationId, async (tx) => {
+    const ms = await tx.query.milestones.findFirst({ where: eq(t.milestones.id, milestoneId), with: { project: true } });
+    if (!ms) throw new Error("Milestone not found");
 
-  let target = to;
-  let note = `Milestone "${ms.name}" → ${to}`;
-  if (to === "COMPLETE" && ms.requiresInspection) {
-    const passed = await db.query.permits.findFirst({
-      where: and(eq(t.permits.projectId, ms.projectId), eq(t.permits.status, "PASSED")),
-    });
-    if (!passed) {
-      target = "BLOCKED";
-      note = `Milestone "${ms.name}" blocked — requires a PASSED inspection before completion`;
+    let target = to;
+    let note = `Milestone "${ms.name}" → ${to}`;
+    if (to === "COMPLETE" && ms.requiresInspection) {
+      const passed = await tx.query.permits.findFirst({
+        where: and(eq(t.permits.projectId, ms.projectId), eq(t.permits.status, "PASSED")),
+      });
+      if (!passed) {
+        target = "BLOCKED";
+        note = `Milestone "${ms.name}" blocked — requires a PASSED inspection before completion`;
+      }
     }
-  }
-  await db.update(t.milestones).set({ status: target }).where(eq(t.milestones.id, milestoneId));
+    await tx.update(t.milestones).set({ status: target }).where(eq(t.milestones.id, milestoneId));
+    return { ms, note };
+  });
   await logActivity({ kind: "STATUS", body: note, userId: session.userId, projectId: ms.projectId });
   revalidatePath(`/projects/${ms.projectId}`);
   revalidatePath("/projects");
@@ -530,33 +580,36 @@ export async function setMilestoneStatus(formData: FormData) {
 export async function generateMilestoneInvoice(formData: FormData) {
   const session = await guard("projects.manage");
   const milestoneId = str(formData, "milestoneId");
-  const ms = await db.query.milestones.findFirst({ where: eq(t.milestones.id, milestoneId), with: { project: true } });
-  if (!ms) throw new Error("Milestone not found");
-  if (ms.billed) throw new Error("Milestone already billed");
-  if (ms.billingAmountCents <= 0) throw new Error("Milestone has no billing amount");
+  const { ms, number } = await withTenant(session.organizationId, async (tx) => {
+    const ms = await tx.query.milestones.findFirst({ where: eq(t.milestones.id, milestoneId), with: { project: true } });
+    if (!ms) throw new Error("Milestone not found");
+    if (ms.billed) throw new Error("Milestone already billed");
+    if (ms.billingAmountCents <= 0) throw new Error("Milestone has no billing amount");
 
-  const number = await nextDocNumber("INV", "invoices");
-  const now = new Date();
-  const dueAt = new Date(now);
-  dueAt.setDate(dueAt.getDate() + 30);
-  const [invoice] = await db
-    .insert(t.invoices)
-    .values({
-      number,
-      status: "SENT",
-      customerId: ms.project.customerId,
-      projectId: ms.projectId,
-      issuedAt: now,
-      dueAt,
-    })
-    .returning();
-  await db.insert(t.invoiceLineItems).values({
-    invoiceId: invoice.id,
-    description: `Progress billing — milestone: ${ms.name} (${ms.project.name})`,
-    qty: 1,
-    unitPriceCents: ms.billingAmountCents,
+    const number = await nextDocNumber(tx, "INV", "invoices");
+    const now = new Date();
+    const dueAt = new Date(now);
+    dueAt.setDate(dueAt.getDate() + 30);
+    const [invoice] = await tx
+      .insert(t.invoices)
+      .values({
+        number,
+        status: "SENT",
+        customerId: ms.project.customerId,
+        projectId: ms.projectId,
+        issuedAt: now,
+        dueAt,
+      })
+      .returning();
+    await tx.insert(t.invoiceLineItems).values({
+      invoiceId: invoice.id,
+      description: `Progress billing — milestone: ${ms.name} (${ms.project.name})`,
+      qty: 1,
+      unitPriceCents: ms.billingAmountCents,
+    });
+    await tx.update(t.milestones).set({ billed: true }).where(eq(t.milestones.id, milestoneId));
+    return { ms, number };
   });
-  await db.update(t.milestones).set({ billed: true }).where(eq(t.milestones.id, milestoneId));
   await logActivity({
     kind: "SYSTEM",
     body: `Invoice ${number} generated for milestone "${ms.name}" — ${money(ms.billingAmountCents)}`,
@@ -580,14 +633,17 @@ export async function createChangeOrder(formData: FormData) {
   const description = str(formData, "description");
   const amountCents = dollarsToCents(formData, "amount");
   if (!description || amountCents == null) throw new Error("Description and amount are required");
-  const existing = await db.query.changeOrders.findMany({ where: eq(t.changeOrders.projectId, projectId) });
-  const number = `CO-${String(existing.length + 1).padStart(2, "0")}`;
-  await db.insert(t.changeOrders).values({
-    projectId,
-    number,
-    description,
-    amountCents,
-    status: "PENDING_SIGNATURE",
+  const number = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.changeOrders.findMany({ where: eq(t.changeOrders.projectId, projectId) });
+    const number = `CO-${String(existing.length + 1).padStart(2, "0")}`;
+    await tx.insert(t.changeOrders).values({
+      projectId,
+      number,
+      description,
+      amountCents,
+      status: "PENDING_SIGNATURE",
+    });
+    return number;
   });
   await logActivity({
     kind: "SYSTEM",
@@ -604,12 +660,15 @@ export async function approveChangeOrder(formData: FormData) {
   const changeOrderId = str(formData, "changeOrderId");
   const signedName = str(formData, "signedName");
   if (!signedName) throw new Error("Signed name is required");
-  const co = await db.query.changeOrders.findFirst({ where: eq(t.changeOrders.id, changeOrderId) });
-  if (!co) throw new Error("Change order not found");
-  await db
-    .update(t.changeOrders)
-    .set({ status: "APPROVED", signedName, signedAt: new Date() })
-    .where(eq(t.changeOrders.id, changeOrderId));
+  const co = await withTenant(session.organizationId, async (tx) => {
+    const co = await tx.query.changeOrders.findFirst({ where: eq(t.changeOrders.id, changeOrderId) });
+    if (!co) throw new Error("Change order not found");
+    await tx
+      .update(t.changeOrders)
+      .set({ status: "APPROVED", signedName, signedAt: new Date() })
+      .where(eq(t.changeOrders.id, changeOrderId));
+    return co;
+  });
   await logActivity({
     kind: "STATUS",
     body: `Change order ${co.number} approved & signed by ${signedName} — ${money(co.amountCents)} added to contract value`,
@@ -631,14 +690,16 @@ export async function createPermit(formData: FormData) {
   const projectId = str(formData, "projectId");
   const jurisdiction = str(formData, "jurisdiction");
   if (!jurisdiction) throw new Error("Jurisdiction is required");
-  await db.insert(t.permits).values({
-    projectId,
-    jurisdiction,
-    permitNumber: str(formData, "permitNumber") || null,
-    feeCents: dollarsToCents(formData, "fee"),
-    status: "NOT_APPLIED",
-    notes: str(formData, "notes") || null,
-  });
+  await withTenant(session.organizationId, (tx) =>
+    tx.insert(t.permits).values({
+      projectId,
+      jurisdiction,
+      permitNumber: str(formData, "permitNumber") || null,
+      feeCents: dollarsToCents(formData, "fee"),
+      status: "NOT_APPLIED",
+      notes: str(formData, "notes") || null,
+    })
+  );
   await logActivity({ kind: "SYSTEM", body: `Permit added — ${jurisdiction}`, userId: session.userId, projectId });
   revalidatePath(`/projects/${projectId}`);
 }
@@ -647,8 +708,6 @@ export async function setPermitStatus(formData: FormData) {
   const session = await guard("projects.manage");
   const permitId = str(formData, "permitId");
   const to = str(formData, "to") as (typeof t.permits.$inferSelect)["status"];
-  const permit = await db.query.permits.findFirst({ where: eq(t.permits.id, permitId) });
-  if (!permit) throw new Error("Permit not found");
 
   const patch: Partial<typeof t.permits.$inferInsert> = { status: to };
   if (to === "INSPECTION_SCHEDULED") {
@@ -658,7 +717,13 @@ export async function setPermitStatus(formData: FormData) {
   }
   const permitNumber = str(formData, "permitNumber");
   if (permitNumber) patch.permitNumber = permitNumber;
-  await db.update(t.permits).set(patch).where(eq(t.permits.id, permitId));
+
+  const permit = await withTenant(session.organizationId, async (tx) => {
+    const permit = await tx.query.permits.findFirst({ where: eq(t.permits.id, permitId) });
+    if (!permit) throw new Error("Permit not found");
+    await tx.update(t.permits).set(patch).where(eq(t.permits.id, permitId));
+    return permit;
+  });
   await logActivity({
     kind: "STATUS",
     body:
@@ -681,7 +746,9 @@ export async function addCostEntry(formData: FormData) {
   const amountCents = dollarsToCents(formData, "amount");
   const kind = (str(formData, "kind") || "OTHER") as (typeof t.costEntries.$inferInsert)["kind"];
   if (!description || amountCents == null) throw new Error("Description and amount are required");
-  await db.insert(t.costEntries).values({ projectId, kind, description, amountCents });
+  await withTenant(session.organizationId, (tx) =>
+    tx.insert(t.costEntries).values({ projectId, kind, description, amountCents })
+  );
   await logActivity({
     kind: "SYSTEM",
     body: `Cost logged (${kind.toLowerCase()}): ${description} — ${money(amountCents)}`,
@@ -699,14 +766,16 @@ export async function addSubcontractor(formData: FormData) {
   const trade = str(formData, "trade");
   if (!name || !trade) throw new Error("Name and trade are required");
   const coiRaw = str(formData, "coiExpiresAt");
-  await db.insert(t.subcontractors).values({
-    projectId,
-    name,
-    trade,
-    phone: str(formData, "phone") || null,
-    licenseNumber: str(formData, "licenseNumber") || null,
-    coiExpiresAt: coiRaw ? new Date(coiRaw) : null,
-  });
+  await withTenant(session.organizationId, (tx) =>
+    tx.insert(t.subcontractors).values({
+      projectId,
+      name,
+      trade,
+      phone: str(formData, "phone") || null,
+      licenseNumber: str(formData, "licenseNumber") || null,
+      coiExpiresAt: coiRaw ? new Date(coiRaw) : null,
+    })
+  );
   await logActivity({ kind: "SYSTEM", body: `Subcontractor added: ${name} (${trade})`, userId: session.userId, projectId });
   revalidatePath(`/projects/${projectId}`);
 }

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { and, eq, lt } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -32,19 +32,21 @@ const UNPAID = new Set<string>(["SENT", "PARTIAL", "OVERDUE"]);
 export default async function InvoicesPage({ searchParams }: { searchParams: { status?: string; q?: string } }) {
   const session = await requireSession();
 
-  // Cheap sweep: mark any SENT invoice past due as OVERDUE before querying.
-  await db
-    .update(t.invoices)
-    .set({ status: "OVERDUE" })
-    .where(and(eq(t.invoices.status, "SENT"), lt(t.invoices.dueAt, new Date())));
-
   const statusFilter = (STATUSES as readonly string[]).includes(searchParams.status ?? "")
     ? (searchParams.status as InvoiceStatus)
     : undefined;
 
-  const invoices = await db.query.invoices.findMany({
-    with: { customer: true, job: true, project: true, items: true, payments: true },
-    orderBy: (i, { desc: d }) => [d(i.createdAt)],
+  const invoices = await withTenant(session.organizationId, async (tx) => {
+    // Cheap sweep: mark any SENT invoice past due as OVERDUE before querying.
+    await tx
+      .update(t.invoices)
+      .set({ status: "OVERDUE" })
+      .where(and(eq(t.invoices.status, "SENT"), lt(t.invoices.dueAt, new Date())));
+
+    return tx.query.invoices.findMany({
+      with: { customer: true, job: true, project: true, items: true, payments: true },
+      orderBy: (i, { desc: d }) => [d(i.createdAt)],
+    });
   });
 
   const computed = invoices.map((inv) => {

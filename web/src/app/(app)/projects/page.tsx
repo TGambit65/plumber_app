@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { desc } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -32,10 +32,12 @@ export default async function ProjectsPage() {
   const session = await requireSession();
   if (!can(session.role, "projects.manage")) return <Forbidden />;
 
-  const projects = await db.query.projects.findMany({
-    with: { customer: true, milestones: true, costs: true, changeOrders: true },
-    orderBy: [desc(t.projects.createdAt)],
-  });
+  const projects = await withTenant(session.organizationId, (tx) =>
+    tx.query.projects.findMany({
+      with: { customer: true, milestones: true, costs: true, changeOrders: true },
+      orderBy: [desc(t.projects.createdAt)],
+    })
+  );
 
   return (
     <div>

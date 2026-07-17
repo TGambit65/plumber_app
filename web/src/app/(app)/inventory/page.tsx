@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { desc, inArray } from "drizzle-orm";
@@ -78,10 +78,36 @@ export default async function InventoryPage({ searchParams }: { searchParams: { 
   const manage = can(session.role, "inventory.manage");
   const isTech = session.role === "TECH";
 
-  const allLocations = await db.query.inventoryLocations.findMany({ with: { user: true } });
-  const visible = (isTech ? allLocations.filter((l) => l.userId === session.userId) : allLocations).sort(
-    (a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "WAREHOUSE" ? -1 : 1)
-  );
+  // All page queries run in ONE tenant-scoped transaction.
+  const { visible, allStock, requestsRaw, pos } = await withTenant(session.organizationId, async (tx) => {
+    const allLocations = await tx.query.inventoryLocations.findMany({ with: { user: true } });
+    const visibleLocs = (isTech ? allLocations.filter((l) => l.userId === session.userId) : allLocations).sort(
+      (a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "WAREHOUSE" ? -1 : 1)
+    );
+
+    const visibleIds = visibleLocs.map((l) => l.id);
+    const stock =
+      visibleIds.length === 0
+        ? []
+        : ((await tx.query.stockLevels.findMany({
+            where: inArray(t.stockLevels.locationId, visibleIds),
+            with: { priceBookItem: true },
+          })) as (StockRow & { locationId: string })[]);
+
+    const reqs = await tx.query.partRequests.findMany({
+      with: { requestedBy: true, job: true, priceBookItem: true },
+      orderBy: [desc(t.partRequests.createdAt)],
+    });
+
+    const purchaseOrders = isTech
+      ? []
+      : await tx.query.purchaseOrders.findMany({
+          with: { lines: { with: { priceBookItem: true } } },
+          orderBy: [desc(t.purchaseOrders.createdAt)],
+        });
+
+    return { visible: visibleLocs, allStock: stock, requestsRaw: reqs, pos: purchaseOrders };
+  });
 
   if (visible.length === 0) {
     return (
@@ -93,12 +119,6 @@ export default async function InventoryPage({ searchParams }: { searchParams: { 
   }
 
   const selected = isTech ? visible[0] : visible.find((l) => l.id === searchParams.loc) ?? visible[0];
-
-  const visibleIds = visible.map((l) => l.id);
-  const allStock = (await db.query.stockLevels.findMany({
-    where: inArray(t.stockLevels.locationId, visibleIds),
-    with: { priceBookItem: true },
-  })) as (StockRow & { locationId: string })[];
 
   const selectedStock = allStock
     .filter((s) => s.locationId === selected.id)
@@ -114,20 +134,9 @@ export default async function InventoryPage({ searchParams }: { searchParams: { 
     .filter((g) => g.rows.length > 0);
   const lowCount = lowByLocation.reduce((n, g) => n + g.rows.length, 0);
 
-  const requestsRaw = await db.query.partRequests.findMany({
-    with: { requestedBy: true, job: true, priceBookItem: true },
-    orderBy: [desc(t.partRequests.createdAt)],
-  });
   const requests = requestsRaw.filter(
     (r) => (r.status === "OPEN" || r.status === "ORDERED") && (!isTech || r.requestedById === session.userId)
   );
-
-  const pos = isTech
-    ? []
-    : await db.query.purchaseOrders.findMany({
-        with: { lines: { with: { priceBookItem: true } } },
-        orderBy: [desc(t.purchaseOrders.createdAt)],
-      });
 
   return (
     <div className="space-y-6">

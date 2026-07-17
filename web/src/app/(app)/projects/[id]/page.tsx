@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -75,25 +75,30 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
   const session = await requireSession();
   if (!can(session.role, "projects.manage")) return <Forbidden />;
 
-  const project = await db.query.projects.findFirst({
-    where: eq(t.projects.id, params.id),
-    with: {
-      customer: true,
-      property: true,
-      milestones: true,
-      changeOrders: true,
-      permits: true,
-      costs: true,
-      subs: true,
-      jobs: { with: { assignedTo: true } },
-    },
+  const { project, activities } = await withTenant(session.organizationId, async (tx) => {
+    const project = await tx.query.projects.findFirst({
+      where: eq(t.projects.id, params.id),
+      with: {
+        customer: true,
+        property: true,
+        milestones: true,
+        changeOrders: true,
+        permits: true,
+        costs: true,
+        subs: true,
+        jobs: { with: { assignedTo: true } },
+      },
+    });
+    const activities = project
+      ? await tx.query.activities.findMany({
+          where: eq(t.activities.projectId, project.id),
+          with: { user: true },
+        })
+      : [];
+    return { project, activities };
   });
   if (!project) notFound();
 
-  const activities = await db.query.activities.findMany({
-    where: eq(t.activities.projectId, project.id),
-    with: { user: true },
-  });
   activities.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const approvedCOs = project.changeOrders

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { advanceJobStatus } from "@/lib/actions/field";
 import { and, asc, eq, gte, isNull, lt } from "drizzle-orm";
@@ -47,35 +47,39 @@ export default async function MyDayPage() {
   const startDayAfter = new Date(startToday);
   startDayAfter.setDate(startDayAfter.getDate() + 2);
 
-  const [todayJobs, tomorrowJobs, openParts, [activeEntry]] = await Promise.all([
-    db.query.jobs.findMany({
-      where: and(
-        eq(t.jobs.assignedToId, session.userId),
-        gte(t.jobs.scheduledAt, startToday),
-        lt(t.jobs.scheduledAt, startTomorrow)
-      ),
-      with: { customer: true, property: true },
-      orderBy: asc(t.jobs.scheduledAt),
-    }),
-    db.query.jobs.findMany({
-      where: and(
-        eq(t.jobs.assignedToId, session.userId),
-        gte(t.jobs.scheduledAt, startTomorrow),
-        lt(t.jobs.scheduledAt, startDayAfter)
-      ),
-      with: { customer: true },
-      orderBy: asc(t.jobs.scheduledAt),
-    }),
-    db.query.partRequests.findMany({
-      where: and(eq(t.partRequests.requestedById, session.userId), eq(t.partRequests.status, "OPEN")),
-      with: { job: true },
-    }),
-    db.query.timeEntries.findMany({
-      where: and(eq(t.timeEntries.userId, session.userId), isNull(t.timeEntries.endedAt)),
-      with: { job: true },
-      limit: 1,
-    }),
-  ]);
+  const [todayJobs, tomorrowJobs, openParts, [activeEntry]] = await withTenant(
+    session.organizationId,
+    (tx) =>
+      Promise.all([
+        tx.query.jobs.findMany({
+          where: and(
+            eq(t.jobs.assignedToId, session.userId),
+            gte(t.jobs.scheduledAt, startToday),
+            lt(t.jobs.scheduledAt, startTomorrow)
+          ),
+          with: { customer: true, property: true },
+          orderBy: asc(t.jobs.scheduledAt),
+        }),
+        tx.query.jobs.findMany({
+          where: and(
+            eq(t.jobs.assignedToId, session.userId),
+            gte(t.jobs.scheduledAt, startTomorrow),
+            lt(t.jobs.scheduledAt, startDayAfter)
+          ),
+          with: { customer: true },
+          orderBy: asc(t.jobs.scheduledAt),
+        }),
+        tx.query.partRequests.findMany({
+          where: and(eq(t.partRequests.requestedById, session.userId), eq(t.partRequests.status, "OPEN")),
+          with: { job: true },
+        }),
+        tx.query.timeEntries.findMany({
+          where: and(eq(t.timeEntries.userId, session.userId), isNull(t.timeEntries.endedAt)),
+          with: { job: true },
+          limit: 1,
+        }),
+      ])
+  );
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";

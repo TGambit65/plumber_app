@@ -1,5 +1,14 @@
 import "server-only";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
+import { requireSession } from "@/lib/auth";
+
+/**
+ * These helpers write to org-scoped tables (audit_logs, activities,
+ * notifications), so each resolves the caller's org from the session and runs
+ * inside withTenant — the organization_id column default fills from the GUC
+ * and RLS (once enabled) admits the row. They open their own short
+ * transactions, which is fine alongside a caller's withTenant block.
+ */
 
 /** Write an audit-log row for a sensitive action. */
 export async function audit(
@@ -9,7 +18,10 @@ export async function audit(
   entityId?: string,
   detail?: Record<string, unknown>
 ) {
-  await db.insert(t.auditLogs).values({ userId, action, entity, entityId, detail });
+  const session = await requireSession();
+  await withTenant(session.organizationId, (tx) =>
+    tx.insert(t.auditLogs).values({ userId, action, entity, entityId, detail })
+  );
 }
 
 /** Append to the customer/job/lead/project timeline. */
@@ -22,10 +34,14 @@ export async function logActivity(input: {
   leadId?: string;
   projectId?: string;
 }) {
-  await db.insert(t.activities).values(input);
+  const session = await requireSession();
+  await withTenant(session.organizationId, (tx) => tx.insert(t.activities).values(input));
 }
 
 /** Notify a user in-app. */
 export async function notify(userId: string, title: string, body?: string, href?: string) {
-  await db.insert(t.notifications).values({ userId, title, body, href });
+  const session = await requireSession();
+  await withTenant(session.organizationId, (tx) =>
+    tx.insert(t.notifications).values({ userId, title, body, href })
+  );
 }

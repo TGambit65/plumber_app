@@ -1,6 +1,6 @@
 "use server";
 
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { can, ALL_PERMISSIONS, type Permission } from "@/lib/permissions";
 import type { Role } from "@/lib/auth";
@@ -23,8 +23,11 @@ export async function setUserRole(formData: FormData) {
   const userId = str(formData, "userId");
   const role = str(formData, "role");
   if (!userId || !(ROLES as readonly string[]).includes(role)) return;
-  const [before] = await db.select({ role: t.users.role }).from(t.users).where(eq(t.users.id, userId));
-  await db.update(t.users).set({ role: role as Role }).where(eq(t.users.id, userId));
+  const before = await withTenant(session.organizationId, async (tx) => {
+    const [b] = await tx.select({ role: t.users.role }).from(t.users).where(eq(t.users.id, userId));
+    await tx.update(t.users).set({ role: role as Role }).where(eq(t.users.id, userId));
+    return b;
+  });
   await audit(session.userId, "UPDATE_ROLE", "User", userId, { from: before?.role, to: role });
   await notify(userId, "Your role was updated", `You are now a ${role.replace("_", "/")}.`, "/");
   revalidatePath("/settings");
@@ -41,15 +44,17 @@ export async function setPermissionOverride(formData: FormData) {
   const mode = str(formData, "mode"); // grant | revoke | clear
   if (!userId || !ALL_PERMISSIONS.includes(permission)) return;
 
-  await db
-    .delete(t.userPermissionOverrides)
-    .where(
-      and(eq(t.userPermissionOverrides.userId, userId), eq(t.userPermissionOverrides.permission, permission))
-    );
+  await withTenant(session.organizationId, async (tx) => {
+    await tx
+      .delete(t.userPermissionOverrides)
+      .where(
+        and(eq(t.userPermissionOverrides.userId, userId), eq(t.userPermissionOverrides.permission, permission))
+      );
 
-  if (mode === "grant" || mode === "revoke") {
-    await db.insert(t.userPermissionOverrides).values({ userId, permission, granted: mode === "grant" });
-  }
+    if (mode === "grant" || mode === "revoke") {
+      await tx.insert(t.userPermissionOverrides).values({ userId, permission, granted: mode === "grant" });
+    }
+  });
   await audit(session.userId, "PERMISSION_OVERRIDE", "User", userId, { permission, mode });
   revalidatePath("/settings");
 }
@@ -59,7 +64,9 @@ export async function clearAllOverrides(formData: FormData) {
   const session = await ensureAdmin();
   const userId = str(formData, "userId");
   if (!userId) return;
-  await db.delete(t.userPermissionOverrides).where(eq(t.userPermissionOverrides.userId, userId));
+  await withTenant(session.organizationId, (tx) =>
+    tx.delete(t.userPermissionOverrides).where(eq(t.userPermissionOverrides.userId, userId))
+  );
   await audit(session.userId, "PERMISSION_OVERRIDE_CLEAR_ALL", "User", userId);
   revalidatePath("/settings");
 }
@@ -71,21 +78,23 @@ export async function configureOrgMemory(formData: FormData) {
   const gatewayUrl = str(formData, "gatewayUrl");
   const token = str(formData, "token");
   const namespace = str(formData, "namespace") || "plumber_app";
-  const [existing] = await db
-    .select()
-    .from(t.integrationConnections)
-    .where(eq(t.integrationConnections.provider, "ORGMEMORY"));
   const connected = Boolean(gatewayUrl && token);
   const values = {
     status: (connected ? "CONNECTED" : "DISCONNECTED") as "CONNECTED" | "DISCONNECTED",
     config: { gatewayUrl, token, namespace },
     lastSyncAt: connected ? new Date() : null,
   };
-  if (existing) {
-    await db.update(t.integrationConnections).set(values).where(eq(t.integrationConnections.id, existing.id));
-  } else {
-    await db.insert(t.integrationConnections).values({ provider: "ORGMEMORY", ...values });
-  }
+  await withTenant(session.organizationId, async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(t.integrationConnections)
+      .where(eq(t.integrationConnections.provider, "ORGMEMORY"));
+    if (existing) {
+      await tx.update(t.integrationConnections).set(values).where(eq(t.integrationConnections.id, existing.id));
+    } else {
+      await tx.insert(t.integrationConnections).values({ provider: "ORGMEMORY", ...values });
+    }
+  });
   await audit(session.userId, connected ? "CONNECT" : "UPDATE", "Integration", "ORGMEMORY", { gatewayUrl, namespace });
   revalidatePath("/settings");
   revalidatePath("/kb");
@@ -94,10 +103,12 @@ export async function configureOrgMemory(formData: FormData) {
 export async function disconnectOrgMemory() {
   const session = await requireSession();
   if (!can(session.role, "integrations.manage")) throw new Error("Not allowed");
-  await db
-    .update(t.integrationConnections)
-    .set({ status: "DISCONNECTED" })
-    .where(eq(t.integrationConnections.provider, "ORGMEMORY"));
+  await withTenant(session.organizationId, (tx) =>
+    tx
+      .update(t.integrationConnections)
+      .set({ status: "DISCONNECTED" })
+      .where(eq(t.integrationConnections.provider, "ORGMEMORY"))
+  );
   await audit(session.userId, "DISCONNECT", "Integration", "ORGMEMORY");
   revalidatePath("/settings");
   revalidatePath("/kb");
@@ -109,11 +120,14 @@ const OPEN_ESTIMATE = ["DRAFT", "SENT", "VIEWED"] as const;
 
 /** Count the open work currently owned by a user (for the confirm dialog). */
 export async function countOpenWork(userId: string) {
-  const [jobs, leads, estimates] = await Promise.all([
-    db.select({ id: t.jobs.id }).from(t.jobs).where(and(eq(t.jobs.assignedToId, userId), inArray(t.jobs.status, [...OPEN_JOB]))),
-    db.select({ id: t.leads.id }).from(t.leads).where(and(eq(t.leads.assignedToId, userId), inArray(t.leads.stage, [...OPEN_LEAD]))),
-    db.select({ id: t.estimates.id }).from(t.estimates).where(and(eq(t.estimates.createdById, userId), inArray(t.estimates.status, [...OPEN_ESTIMATE]))),
-  ]);
+  const session = await requireSession();
+  const [jobs, leads, estimates] = await withTenant(session.organizationId, (tx) =>
+    Promise.all([
+      tx.select({ id: t.jobs.id }).from(t.jobs).where(and(eq(t.jobs.assignedToId, userId), inArray(t.jobs.status, [...OPEN_JOB]))),
+      tx.select({ id: t.leads.id }).from(t.leads).where(and(eq(t.leads.assignedToId, userId), inArray(t.leads.stage, [...OPEN_LEAD]))),
+      tx.select({ id: t.estimates.id }).from(t.estimates).where(and(eq(t.estimates.createdById, userId), inArray(t.estimates.status, [...OPEN_ESTIMATE]))),
+    ])
+  );
   return { jobs: jobs.length, leads: leads.length, estimates: estimates.length };
 }
 
@@ -128,29 +142,32 @@ export async function reassignAndDeactivate(formData: FormData) {
   const deactivate = str(formData, "deactivate") === "true";
   if (!fromId || !toId || fromId === toId) return;
 
-  const jobsRes = await db
-    .update(t.jobs)
-    .set({ assignedToId: toId })
-    .where(and(eq(t.jobs.assignedToId, fromId), inArray(t.jobs.status, [...OPEN_JOB])))
-    .returning({ id: t.jobs.id });
+  const summary = await withTenant(session.organizationId, async (tx) => {
+    const jobsRes = await tx
+      .update(t.jobs)
+      .set({ assignedToId: toId })
+      .where(and(eq(t.jobs.assignedToId, fromId), inArray(t.jobs.status, [...OPEN_JOB])))
+      .returning({ id: t.jobs.id });
 
-  const leadsRes = await db
-    .update(t.leads)
-    .set({ assignedToId: toId })
-    .where(and(eq(t.leads.assignedToId, fromId), inArray(t.leads.stage, [...OPEN_LEAD])))
-    .returning({ id: t.leads.id });
+    const leadsRes = await tx
+      .update(t.leads)
+      .set({ assignedToId: toId })
+      .where(and(eq(t.leads.assignedToId, fromId), inArray(t.leads.stage, [...OPEN_LEAD])))
+      .returning({ id: t.leads.id });
 
-  const estRes = await db
-    .update(t.estimates)
-    .set({ createdById: toId })
-    .where(and(eq(t.estimates.createdById, fromId), inArray(t.estimates.status, [...OPEN_ESTIMATE])))
-    .returning({ id: t.estimates.id });
+    const estRes = await tx
+      .update(t.estimates)
+      .set({ createdById: toId })
+      .where(and(eq(t.estimates.createdById, fromId), inArray(t.estimates.status, [...OPEN_ESTIMATE])))
+      .returning({ id: t.estimates.id });
 
-  if (deactivate && fromId !== session.userId) {
-    await db.update(t.users).set({ active: false }).where(eq(t.users.id, fromId));
-  }
+    if (deactivate && fromId !== session.userId) {
+      await tx.update(t.users).set({ active: false }).where(eq(t.users.id, fromId));
+    }
 
-  const summary = { jobs: jobsRes.length, leads: leadsRes.length, estimates: estRes.length, deactivated: deactivate };
+    return { jobs: jobsRes.length, leads: leadsRes.length, estimates: estRes.length, deactivated: deactivate };
+  });
+
   await audit(session.userId, "REASSIGN_WORK", "User", fromId, { toId, ...summary });
   await notify(
     toId,

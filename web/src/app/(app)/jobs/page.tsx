@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { and, asc, desc, eq, ilike, or, type SQL } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import {
@@ -31,18 +31,13 @@ export default async function JobsPage({
 }: {
   searchParams: { status?: string; tech?: string; q?: string };
 }) {
-  await requireSession();
+  const session = await requireSession();
 
   const q = (searchParams.q ?? "").trim();
   const status = (STATUSES as readonly string[]).includes(searchParams.status ?? "")
     ? (searchParams.status as JobStatus)
     : undefined;
   const techId = (searchParams.tech ?? "").trim();
-
-  const techs = await db.query.users.findMany({
-    where: eq(t.users.role, "TECH"),
-    orderBy: asc(t.users.name),
-  });
 
   const conds: SQL[] = [];
   if (status) conds.push(eq(t.jobs.status, status));
@@ -53,14 +48,22 @@ export default async function JobsPage({
     if (cond) conds.push(cond);
   }
 
-  const rows = await db
-    .select({ job: t.jobs, customer: t.customers, property: t.properties, tech: t.users })
-    .from(t.jobs)
-    .innerJoin(t.customers, eq(t.jobs.customerId, t.customers.id))
-    .innerJoin(t.properties, eq(t.jobs.propertyId, t.properties.id))
-    .leftJoin(t.users, eq(t.jobs.assignedToId, t.users.id))
-    .where(conds.length ? and(...conds) : undefined)
-    .orderBy(desc(t.jobs.createdAt));
+  const [techs, rows] = await withTenant(session.organizationId, (tx) =>
+    Promise.all([
+      tx.query.users.findMany({
+        where: eq(t.users.role, "TECH"),
+        orderBy: asc(t.users.name),
+      }),
+      tx
+        .select({ job: t.jobs, customer: t.customers, property: t.properties, tech: t.users })
+        .from(t.jobs)
+        .innerJoin(t.customers, eq(t.jobs.customerId, t.customers.id))
+        .innerJoin(t.properties, eq(t.jobs.propertyId, t.properties.id))
+        .leftJoin(t.users, eq(t.jobs.assignedToId, t.users.id))
+        .where(conds.length ? and(...conds) : undefined)
+        .orderBy(desc(t.jobs.createdAt)),
+    ])
+  );
 
   return (
     <div>

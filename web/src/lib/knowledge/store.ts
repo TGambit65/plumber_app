@@ -1,6 +1,6 @@
 import "server-only";
-import { db, t, withTenant } from "@/db";
-import { desc, ilike, or, eq, and } from "drizzle-orm";
+import { t, withTenant } from "@/db";
+import { desc, ilike, or, eq } from "drizzle-orm";
 
 export type KbHit = {
   id: string;
@@ -211,15 +211,12 @@ export class OrgMemoryStore implements KnowledgeStore {
  * without it we stay on the local store.
  */
 export async function getKnowledgeStore(organizationId: string): Promise<KnowledgeStore> {
-  const [conn] = await db
-    .select()
-    .from(t.integrationConnections)
-    .where(
-      and(
-        eq(t.integrationConnections.provider, "ORGMEMORY"),
-        eq(t.integrationConnections.organizationId, organizationId)
-      )
-    );
+  const [conn] = await withTenant(organizationId, (tx) =>
+    tx
+      .select()
+      .from(t.integrationConnections)
+      .where(eq(t.integrationConnections.provider, "ORGMEMORY"))
+  );
   const cfg = (conn?.config ?? {}) as Partial<OrgMemoryConfig>;
   if (conn?.status === "CONNECTED" && cfg.gatewayUrl && cfg.token) {
     return new OrgMemoryStore({

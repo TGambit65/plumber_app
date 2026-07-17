@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { and, asc, desc, eq, gte, lt, notInArray } from "drizzle-orm";
 import { fmtDate, fmtTime, money } from "@/lib/format";
@@ -40,27 +40,29 @@ export default async function EarningsPage() {
   const startTomorrow = new Date(startToday);
   startTomorrow.setDate(startTomorrow.getDate() + 1);
 
-  const [entries, weekEntries, activeJobs] = await Promise.all([
-    db.query.commissionEntries.findMany({
-      where: eq(t.commissionEntries.userId, session.userId),
-      orderBy: desc(t.commissionEntries.createdAt),
-    }),
-    db.query.timeEntries.findMany({
-      where: and(eq(t.timeEntries.userId, session.userId), gte(t.timeEntries.startedAt, startOfWeek)),
-      with: { job: true },
-      orderBy: asc(t.timeEntries.startedAt),
-    }),
-    db.query.jobs.findMany({
-      where: and(
-        eq(t.jobs.assignedToId, session.userId),
-        gte(t.jobs.scheduledAt, startToday),
-        lt(t.jobs.scheduledAt, startTomorrow),
-        notInArray(t.jobs.status, ["COMPLETED", "CANCELLED"])
-      ),
-      orderBy: asc(t.jobs.scheduledAt),
-      limit: 1,
-    }),
-  ]);
+  const [entries, weekEntries, activeJobs] = await withTenant(session.organizationId, (tx) =>
+    Promise.all([
+      tx.query.commissionEntries.findMany({
+        where: eq(t.commissionEntries.userId, session.userId),
+        orderBy: desc(t.commissionEntries.createdAt),
+      }),
+      tx.query.timeEntries.findMany({
+        where: and(eq(t.timeEntries.userId, session.userId), gte(t.timeEntries.startedAt, startOfWeek)),
+        with: { job: true },
+        orderBy: asc(t.timeEntries.startedAt),
+      }),
+      tx.query.jobs.findMany({
+        where: and(
+          eq(t.jobs.assignedToId, session.userId),
+          gte(t.jobs.scheduledAt, startToday),
+          lt(t.jobs.scheduledAt, startTomorrow),
+          notInArray(t.jobs.status, ["COMPLETED", "CANCELLED"])
+        ),
+        orderBy: asc(t.jobs.scheduledAt),
+        limit: 1,
+      }),
+    ])
+  );
 
   const thisPeriod = entries.filter((e) => e.period === period);
   const sum = (status: string) =>

@@ -1,4 +1,4 @@
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { desc, eq, gte } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -53,28 +53,30 @@ export default async function DashboardPage() {
   const weeks8Start = new Date(now.getTime() - 8 * 7 * 24 * 60 * 60 * 1000);
 
   const [payments, invoices, leads, jobs, users, timeEntries, photos, reviews, estimates, followUps, projects, membershipRows, auditRows] =
-    await Promise.all([
-      db.query.payments.findMany(),
-      db.query.invoices.findMany({ with: { items: true, payments: true } }),
-      db.query.leads.findMany(),
-      db.query.jobs.findMany({ columns: { id: true, assignedToId: true, completedAt: true, status: true } }),
-      db.query.users.findMany({ orderBy: (u, { asc }) => [asc(u.name)] }),
-      db.query.timeEntries.findMany({ where: gte(t.timeEntries.startedAt, days30) }),
-      db.query.jobPhotos.findMany({ where: gte(t.jobPhotos.takenAt, days30), columns: { id: true, takenById: true } }),
-      db.query.activities.findMany({ where: eq(t.activities.kind, "REVIEW") }),
-      db.query.estimates.findMany({ with: { options: { with: { items: true } } } }),
-      db.query.followUps.findMany({ with: { lead: true, estimate: true } }),
-      db.query.projects.findMany({ columns: { id: true, status: true } }),
-      db.query.memberships.findMany({ columns: { id: true, status: true } }),
-      can(session.role, "audit.view")
-        ? db
-            .select({ log: t.auditLogs, user: t.users })
-            .from(t.auditLogs)
-            .leftJoin(t.users, eq(t.auditLogs.userId, t.users.id))
-            .orderBy(desc(t.auditLogs.createdAt))
-            .limit(8)
-        : Promise.resolve([]),
-    ]);
+    await withTenant(session.organizationId, (tx) =>
+      Promise.all([
+        tx.query.payments.findMany(),
+        tx.query.invoices.findMany({ with: { items: true, payments: true } }),
+        tx.query.leads.findMany(),
+        tx.query.jobs.findMany({ columns: { id: true, assignedToId: true, completedAt: true, status: true } }),
+        tx.query.users.findMany({ orderBy: (u, { asc }) => [asc(u.name)] }),
+        tx.query.timeEntries.findMany({ where: gte(t.timeEntries.startedAt, days30) }),
+        tx.query.jobPhotos.findMany({ where: gte(t.jobPhotos.takenAt, days30), columns: { id: true, takenById: true } }),
+        tx.query.activities.findMany({ where: eq(t.activities.kind, "REVIEW") }),
+        tx.query.estimates.findMany({ with: { options: { with: { items: true } } } }),
+        tx.query.followUps.findMany({ with: { lead: true, estimate: true } }),
+        tx.query.projects.findMany({ columns: { id: true, status: true } }),
+        tx.query.memberships.findMany({ columns: { id: true, status: true } }),
+        can(session.role, "audit.view")
+          ? tx
+              .select({ log: t.auditLogs, user: t.users })
+              .from(t.auditLogs)
+              .leftJoin(t.users, eq(t.auditLogs.userId, t.users.id))
+              .orderBy(desc(t.auditLogs.createdAt))
+              .limit(8)
+          : Promise.resolve([]),
+      ])
+    );
 
   // ── KPIs ──
   const revenueThisMonth = payments

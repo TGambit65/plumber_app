@@ -4,7 +4,7 @@ import { requireSession, destroySession } from "@/lib/auth";
 import { ROLE_LABELS } from "@/lib/permissions";
 import { navForUser } from "@/lib/nav";
 import { effectivePermissions } from "@/lib/effective-permissions";
-import { db, t } from "@/db";
+import { db, t, withTenant } from "@/db";
 import { and, eq, isNull, desc, inArray, ne } from "drizzle-orm";
 import { Avatar } from "@/components/ui";
 import { NavLinks, MobileNav } from "@/components/nav-links";
@@ -28,35 +28,38 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     .where(eq(t.organizations.id, session.organizationId));
   const orgName = org?.name ?? "Trade-Ops";
 
-  const unread = await db
-    .select({ id: t.notifications.id, title: t.notifications.title, body: t.notifications.body, href: t.notifications.href, createdAt: t.notifications.createdAt })
-    .from(t.notifications)
-    .where(and(eq(t.notifications.userId, session.userId), isNull(t.notifications.readAt)))
-    .orderBy(desc(t.notifications.createdAt))
-    .limit(10);
+  const { unread, unreadMessages } = await withTenant(session.organizationId, async (tx) => {
+    const unread = await tx
+      .select({ id: t.notifications.id, title: t.notifications.title, body: t.notifications.body, href: t.notifications.href, createdAt: t.notifications.createdAt })
+      .from(t.notifications)
+      .where(and(eq(t.notifications.userId, session.userId), isNull(t.notifications.readAt)))
+      .orderBy(desc(t.notifications.createdAt))
+      .limit(10);
 
-  // Unread message count for the Messages nav badge.
-  const myConvos = await db
-    .select({ conversationId: t.conversationParticipants.conversationId, lastReadAt: t.conversationParticipants.lastReadAt })
-    .from(t.conversationParticipants)
-    .where(eq(t.conversationParticipants.userId, session.userId));
-  let unreadMessages = 0;
-  if (myConvos.length > 0) {
-    const msgs = await db
-      .select({ conversationId: t.messages.conversationId, createdAt: t.messages.createdAt, senderId: t.messages.senderId })
-      .from(t.messages)
-      .where(
-        and(
-          inArray(
-            t.messages.conversationId,
-            myConvos.map((c) => c.conversationId)
-          ),
-          ne(t.messages.senderId, session.userId)
-        )
-      );
-    const lastRead = new Map(myConvos.map((c) => [c.conversationId, c.lastReadAt?.getTime() ?? 0]));
-    unreadMessages = msgs.filter((m) => m.createdAt.getTime() > (lastRead.get(m.conversationId) ?? 0)).length;
-  }
+    // Unread message count for the Messages nav badge.
+    const myConvos = await tx
+      .select({ conversationId: t.conversationParticipants.conversationId, lastReadAt: t.conversationParticipants.lastReadAt })
+      .from(t.conversationParticipants)
+      .where(eq(t.conversationParticipants.userId, session.userId));
+    let unreadMessages = 0;
+    if (myConvos.length > 0) {
+      const msgs = await tx
+        .select({ conversationId: t.messages.conversationId, createdAt: t.messages.createdAt, senderId: t.messages.senderId })
+        .from(t.messages)
+        .where(
+          and(
+            inArray(
+              t.messages.conversationId,
+              myConvos.map((c) => c.conversationId)
+            ),
+            ne(t.messages.senderId, session.userId)
+          )
+        );
+      const lastRead = new Map(myConvos.map((c) => [c.conversationId, c.lastReadAt?.getTime() ?? 0]));
+      unreadMessages = msgs.filter((m) => m.createdAt.getTime() > (lastRead.get(m.conversationId) ?? 0)).length;
+    }
+    return { unread, unreadMessages };
+  });
 
   return (
     <div className="flex min-h-screen">

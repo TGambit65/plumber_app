@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db, t } from "@/db";
+import { t, withTenant } from "@/db";
 import { asc, ilike, or } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -32,23 +32,25 @@ export default async function CustomersPage({ searchParams }: { searchParams: { 
   const q = (searchParams.q ?? "").trim();
   const like = `%${q}%`;
 
-  const customers = await db.query.customers.findMany({
-    where: q
-      ? or(
-          ilike(t.customers.name, like),
-          ilike(t.customers.company, like),
-          ilike(t.customers.phone, like),
-          ilike(t.customers.email, like)
-        )
-      : undefined,
-    with: {
-      properties: { columns: { id: true } },
-      jobs: { columns: { id: true, status: true } },
-      membership: true,
-      invoices: { with: { items: true, payments: true } },
-    },
-    orderBy: asc(t.customers.name),
-  });
+  const customers = await withTenant(session.organizationId, (tx) =>
+    tx.query.customers.findMany({
+      where: q
+        ? or(
+            ilike(t.customers.name, like),
+            ilike(t.customers.company, like),
+            ilike(t.customers.phone, like),
+            ilike(t.customers.email, like)
+          )
+        : undefined,
+      with: {
+        properties: { columns: { id: true } },
+        jobs: { columns: { id: true, status: true } },
+        membership: true,
+        invoices: { with: { items: true, payments: true } },
+      },
+      orderBy: asc(t.customers.name),
+    })
+  );
 
   const canEdit = can(session.role, "customers.edit");
 
