@@ -97,6 +97,8 @@ export const customers = pgTable("customers", {
   email: text("email"),
   phone: text("phone"),
   notes: text("notes"),
+  /** SMS opt-out (STOP via the inbound webhook, or set manually). Honored by every transactional send. */
+  smsOptOut: boolean("sms_opt_out").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -1072,6 +1074,8 @@ export const outboundStatusEnum = pgEnum("outbound_status", [
 ]);
 export const outboundKindEnum = pgEnum("outbound_kind", [
   "ESTIMATE_SEND", "FOLLOW_UP_TOUCH", "CUSTOMER_MESSAGE", "LICENSED_SIGNOFF",
+  // Templated transactional SMS (dispatch D1) — auto-send by policy, always recorded.
+  "ON_MY_WAY", "BOOKING_CONFIRMATION", "REMINDER",
 ]);
 
 export const outboundMessages = pgTable("outbound_messages", {
@@ -1095,6 +1099,11 @@ export const outboundMessages = pgTable("outbound_messages", {
   approvedById: text("approved_by_id").references(() => users.id),
   decidedAt: timestamp("decided_at", { withTimezone: true }),
   rejectReason: text("reject_reason"),
+  // Delivery result (dispatch D1): provider message id + honest status.
+  externalSid: text("external_sid"),
+  /** SENT | FAILED | SKIPPED_OPTOUT | SKIPPED_NO_PHONE | SKIPPED_NOT_CONNECTED */
+  deliveryStatus: text("delivery_status"),
+  deliveryError: text("delivery_error"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

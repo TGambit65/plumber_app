@@ -11,6 +11,7 @@ import bcrypt from "bcryptjs";
 import { lineTotal, money, fmtDateTime } from "@/lib/format";
 import { enabledCustomFieldDefs, enabledEquipmentKinds } from "@/lib/trade-packs";
 import { validateCustomFieldValues } from "@/lib/custom-fields";
+import { orgName, sendTransactionalSms } from "@/lib/comms/sms";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 
@@ -71,6 +72,23 @@ export async function assignJob(formData: FormData) {
     `${job.customer.name} · ${job.property.address} · ${fmtDateTime(scheduledAt)}`,
     "/my-day"
   );
+
+  // D1: real booking-confirmation SMS (templated → auto-send policy; recorded either way).
+  await sendTransactionalSms({
+    organizationId: session.organizationId,
+    requestedById: session.userId,
+    kind: "BOOKING_CONFIRMATION",
+    customerId: job.customerId,
+    jobId,
+    params: {
+      companyName: await orgName(session.organizationId),
+      customerFirstName: job.customer.name,
+      jobType: job.jobType,
+      when: fmtDateTime(scheduledAt),
+      address: job.property.address,
+    },
+  });
+
   revalidatePath("/dispatch");
   revalidatePath("/jobs");
 }
@@ -137,6 +155,25 @@ export async function bookJob(formData: FormData) {
       "/my-day"
     );
   }
+
+  // D1: confirmation SMS only when an actual time was booked.
+  if (scheduledAt) {
+    await sendTransactionalSms({
+      organizationId: session.organizationId,
+      requestedById: session.userId,
+      kind: "BOOKING_CONFIRMATION",
+      customerId,
+      jobId: created.job.id,
+      params: {
+        companyName: await orgName(session.organizationId),
+        customerFirstName: created.property.customer.name,
+        jobType,
+        when: fmtDateTime(scheduledAt),
+        address: created.property.address,
+      },
+    });
+  }
+
   revalidatePath("/dispatch");
   revalidatePath("/jobs");
 }

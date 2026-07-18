@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { t, withTenant, type TenantDb } from "@/db";
 import { getSession, type Session } from "@/lib/auth";
 import { eq } from "drizzle-orm";
+import { hasRecentSend, orgName, sendTransactionalSms } from "@/lib/comms/sms";
 
 export const dynamic = "force-dynamic";
 
@@ -217,6 +218,50 @@ export async function POST(req: NextRequest) {
     }
     return out;
   });
+
+  // D1 post-commit hook: offline-captured EN_ROUTE transitions trigger the
+  // real on-my-way SMS AFTER the transaction lands (never network-inside-tx).
+  // Deduped per job so a re-synced queue can't double-text the customer.
+  const enRouteJobIds = new Set<string>();
+  for (let i = 0; i < changes.length; i++) {
+    const change = changes[i];
+    const result = results[i];
+    if (
+      change?.entityType === "job" &&
+      change.action === "update" &&
+      change.data?.status === "EN_ROUTE" &&
+      result?.status === "updated" &&
+      result.serverId
+    ) {
+      enRouteJobIds.add(result.serverId);
+    }
+  }
+  for (const jobId of Array.from(enRouteJobIds)) {
+    try {
+      if (await hasRecentSend(session.organizationId, jobId, "ON_MY_WAY")) continue;
+      const job = await withTenant(session.organizationId, (tx) =>
+        tx.query.jobs.findFirst({ where: eq(t.jobs.id, jobId), with: { customer: true } })
+      );
+      if (!job) continue;
+      await sendTransactionalSms({
+        organizationId: session.organizationId,
+        requestedById: session.userId,
+        kind: "ON_MY_WAY",
+        customerId: job.customerId,
+        jobId,
+        params: {
+          companyName: await orgName(session.organizationId),
+          customerFirstName: job.customer.name,
+          techName: session.name,
+          jobType: job.jobType,
+        },
+      });
+    } catch (e) {
+      // Never fail the sync because a text couldn't send — the attempt itself
+      // is recorded (or logged) loudly by the pipeline.
+      console.error(`[sync push on-my-way] ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 
   return NextResponse.json({ serverTimestamp, results });
 }

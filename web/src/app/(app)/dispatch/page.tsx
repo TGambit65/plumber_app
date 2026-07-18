@@ -4,6 +4,7 @@ import { and, asc, eq, gte, isNull, lt, notInArray, or } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { assignJob, bookJob } from "@/lib/actions/office";
+import { sendTomorrowReminders } from "@/lib/actions/comms";
 import { enabledJobTypes, enabledPacks } from "@/lib/trade-packs";
 import {
   Avatar,
@@ -122,6 +123,13 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
         subtitle={`${fmtDate(day)}${isToday ? " · today" : ""}`}
         action={
           <div className="flex items-center gap-2">
+            {canManage ? (
+              <form action={sendTomorrowReminders}>
+                <Button type="submit" size="sm" variant="secondary" title="Text a day-before reminder to every customer scheduled tomorrow (deduped — safe to run twice)">
+                  📅 Send tomorrow&apos;s reminders
+                </Button>
+              </form>
+            ) : null}
             <Link href={`/dispatch?date=${prevStr}`} className={buttonClass("secondary", "sm")}>
               ← Prev
             </Link>

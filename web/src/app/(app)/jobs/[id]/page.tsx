@@ -90,7 +90,7 @@ export default async function JobDetailPage({ params }: { params: { id: string }
     });
     if (!job) return null;
 
-    const [priorJobs, priceBook] = await Promise.all([
+    const [priorJobs, priceBook, customerTexts] = await Promise.all([
       tx.query.jobs.findMany({
         where: and(eq(t.jobs.propertyId, job.propertyId), ne(t.jobs.id, job.id)),
         orderBy: desc(t.jobs.createdAt),
@@ -101,11 +101,17 @@ export default async function JobDetailPage({ params }: { params: { id: string }
         .from(t.priceBookItems)
         .where(eq(t.priceBookItems.active, true))
         .orderBy(asc(t.priceBookItems.category), asc(t.priceBookItems.name)),
+      // D1: every SMS attempt for this job, honest delivery status included.
+      tx.query.outboundMessages.findMany({
+        where: eq(t.outboundMessages.jobId, job.id),
+        orderBy: desc(t.outboundMessages.createdAt),
+        limit: 12,
+      }),
     ]);
-    return { job, priorJobs, priceBook };
+    return { job, priorJobs, priceBook, customerTexts };
   });
   if (!data) notFound();
-  const { job, priorJobs, priceBook } = data;
+  const { job, priorJobs, priceBook, customerTexts } = data;
 
   const next = NEXT_STEP[job.status];
   const mapsHref = `https://maps.google.com/?q=${encodeURIComponent(
@@ -367,6 +373,45 @@ export default async function JobDetailPage({ params }: { params: { id: string }
                   </div>
                 </div>
               </form>
+            </CardBody>
+          </Card>
+
+          {/* Customer notifications (D1) — every SMS attempt, honest status */}
+          <Card>
+            <CardHeader
+              title="Customer notifications"
+              subtitle="Booking confirmations, on-my-way texts & reminders — with real delivery status"
+            />
+            <CardBody>
+              {customerTexts.length === 0 ? (
+                <EmptyState title="No texts yet" hint="Confirmations send on assignment; on-my-way sends when the tech heads out." />
+              ) : (
+                <ul className="space-y-2">
+                  {customerTexts.map((m) => (
+                    <li key={m.id} className="rounded-lg border border-slate-200 p-2.5 text-sm">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge tone="blue">{statusLabel(m.kind)}</Badge>
+                        <Badge
+                          tone={
+                            m.deliveryStatus === "SENT"
+                              ? "green"
+                              : m.deliveryStatus === "FAILED"
+                                ? "red"
+                                : "amber"
+                          }
+                        >
+                          {m.deliveryStatus ? statusLabel(m.deliveryStatus) : statusLabel(m.status)}
+                        </Badge>
+                        <span className="ml-auto text-xs text-slate-400">{timeAgo(m.createdAt)}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-600">{m.body}</p>
+                      {m.deliveryError ? (
+                        <p className="mt-1 text-xs font-medium text-red-600">⚠️ {m.deliveryError}</p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </CardBody>
           </Card>
 

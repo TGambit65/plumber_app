@@ -4,6 +4,7 @@ import { t, withTenant, type TenantDb } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { audit, logActivity, notify } from "./helpers";
+import { orgName, sendTransactionalSms } from "@/lib/comms/sms";
 import { and, asc, eq, isNull, like } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -124,10 +125,27 @@ export async function advanceJobStatus(formData: FormData) {
   });
 
   if (to === "EN_ROUTE") {
-    // Simulated auto-text to the customer
+    // D1: REAL on-my-way SMS via Twilio (templated → auto-send policy). The
+    // activity log reflects what actually happened — never "sent" unless sent.
+    const outcome = await sendTransactionalSms({
+      organizationId: session.organizationId,
+      requestedById: session.userId,
+      kind: "ON_MY_WAY",
+      customerId: job.customerId,
+      jobId,
+      params: {
+        companyName: await orgName(session.organizationId),
+        customerFirstName: job.customer.name,
+        techName: session.name,
+        jobType: job.jobType,
+      },
+    });
     await logActivity({
       kind: "SMS",
-      body: `On my way text sent to ${job.customer.name}`,
+      body:
+        outcome.status === "SENT"
+          ? `On my way text sent to ${job.customer.name}`
+          : `On my way text NOT sent to ${job.customer.name} (${outcome.status.toLowerCase().replace(/_/g, " ")}${outcome.error ? `: ${outcome.error}` : ""})`,
       userId: session.userId,
       jobId,
       customerId: job.customerId,

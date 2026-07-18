@@ -107,13 +107,28 @@ belongs in core; CRMs get read-only visibility).
 
 Sequenced so each phase ships standalone value and feeds the next.
 
-### Phase D1 — The communication loop (weeks 1–2)
-The board learns to talk. Real Twilio sends behind the existing egress policy:
-- **On-my-way SMS** with tech name + live ETA when a job goes `EN_ROUTE`
-- **Booking confirmation** SMS/email on `assignJob` / `bookJob`
-- **Day-before reminder** (scheduled sweep)
-- Delivery status surfaced on the job card; failures loud, never silent
-- Templated transactional messages auto-approved by policy; free-text still gated
+### Phase D1 — The communication loop ✅ DONE (2026-07-18)
+The board talks for real now. Shipped and verified end-to-end vs a
+vendor-shaped mock Twilio:
+- **Live Twilio connector** (`src/lib/connectors/twilio.ts`) — Messages API,
+  basic auth, form-encoded, SMS-only (email fails loudly), baseUrl-overridable.
+- **Templated transactional pipeline** (`src/lib/comms/`) — ON_MY_WAY /
+  BOOKING_CONFIRMATION / REMINDER render from fixed templates (no free text →
+  auto-send policy); free-text still approval-gated. EVERY attempt recorded in
+  `outbound_messages` with honest `deliveryStatus`
+  (SENT/FAILED/SKIPPED_OPTOUT/SKIPPED_NO_PHONE/SKIPPED_NOT_CONNECTED) + Twilio SID.
+- **Hooks**: `assignJob`/`bookJob` → confirmation; `EN_ROUTE` via the online
+  action AND the offline sync push (post-commit, deduped so queue replays never
+  double-text) → on-my-way naming the tech; activity log states what actually
+  happened.
+- **Reminder sweep** — dispatch-board button texts every customer scheduled
+  tomorrow; deduped per job (safe to re-run / cron).
+- **STOP/START webhook** (`/api/sms/inbound/[org]`) — Twilio-signature-verified
+  (HMAC-SHA1, forged → 403); flips `customers.smsOptOut`, honored by every send.
+- **Delivery visibility** — "Customer notifications" panel on the job detail
+  page with per-message status + error.
+Verified: confirmation/on-my-way/reminder round-trips, dedupe, opt-out honored
+(SKIPPED_OPTOUT recorded, nothing sent), forged-signature rejection.
 
 ### Phase D2 — The calendar spine (weeks 2–4)
 - **ICS feeds**: `/api/calendar/tech/<signed-token>.ics` + org-wide feed —

@@ -20,6 +20,7 @@ import { odooConnector } from "./odoo";
 import { hubspotConnector } from "./hubspot";
 import { quickbooksConnector } from "./quickbooks";
 import { cxmlSupplierConnector } from "./cxml-supplier";
+import { twilioConnector } from "./twilio";
 
 /**
  * Connector registry. Odoo (JSON-RPC), HubSpot (CRM v3 REST) and QuickBooks
@@ -243,20 +244,8 @@ export const REGISTRY: Record<string, Connector> = {
   }),
 
   // Messaging
-  TWILIO: makeStub({
-    descriptor: {
-      provider: "TWILIO",
-      label: "Twilio",
-      emoji: "💬",
-      capabilities: ["messaging"],
-      blurb: "SMS — on-my-way texts & follow-ups",
-      configFields: [
-        { key: "accountSid", label: "Account SID", kind: "text", placeholder: "ACxxxxxxxx", required: true },
-        { key: "fromNumber", label: "From number", kind: "text", placeholder: "+15550199" },
-        apiKeyField("Auth token"),
-      ],
-    },
-  }),
+  // Messaging — Twilio is a real Messages API implementation (SMS-only).
+  TWILIO: twilioConnector,
 
   EMAIL: makeStub({
     descriptor: {
