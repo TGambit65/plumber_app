@@ -1,0 +1,186 @@
+# Dispatch: Integrations & Intelligence Plan
+
+*Drafted 2026-07-18 · grounded in the code as of commit `f01142d`*
+
+## 1. How dispatch works today (current state)
+
+### The workflow
+
+Dispatch (`/dispatch`, `src/app/(app)/dispatch/page.tsx`) is a **day-view board**:
+an amber **Unassigned lane** plus **one column per active tech** (with truck),
+stat row (jobs on board / scheduled / in the field / completed / open
+emergencies), a status legend, and a **Book a job** form (customer → property
+cross-validated, job types composed from the org's enabled trade packs,
+priority, optional schedule + tech).
+
+Two server actions drive it (`src/lib/actions/office.ts`):
+
+- **`bookJob`** — creates the job (`SCHEDULED` if a time was picked, else
+  `UNSCHEDULED` → lands in the unassigned lane).
+- **`assignJob`** — sets `assignedToId + scheduledAt`, flips status to
+  `SCHEDULED`, writes a timeline activity, and **notifies the tech in-app**
+  (notifications table → bell + `/my-day`).
+
+From there the job moves through the tech's hands (`/my-day`, `/field`):
+`SCHEDULED → DISPATCHED → EN_ROUTE → IN_PROGRESS → COMPLETED`, each transition
+written by the offline-capable sync queue.
+
+### How it communicates
+
+| Channel | Mechanism today | Real delivery? |
+|---|---|---|
+| Dispatcher → tech | In-app notification + `/my-day` route | ✅ in-app only (no push/SMS) |
+| Tech → customer ("on my way") | `EN_ROUTE` transition logs "On my way text sent" | ❌ simulated — Twilio connector is a stub |
+| Office → customer | `outbound_messages` approval-gated queue (`CUSTOMER_MESSAGE` etc.) | ❌ executes via stub connectors |
+| Team ↔ team | Conversations/messages module | ✅ in-app |
+| Customer → office | Phone/manual — no self-serve booking or confirmation loop | ❌ none |
+
+### Relationship to CRM
+
+CRM connectors (Odoo live JSON-RPC, HubSpot live REST, + stubs) are **upstream
+of dispatch**: they sync **leads** into `/leads`, which become estimates, which
+become jobs. Dispatch itself doesn't read or write any CRM — by design: jobs,
+scheduling, and crew are core-owned. The correct CRM touchpoint for dispatch is
+**activity write-back** (job booked/completed events pushed to the CRM record),
+not CRM-driven scheduling.
+
+### The honest gaps
+
+1. **No real customer communication** — the biggest one. On-my-way texts,
+   booking confirmations, and reminders are simulated.
+2. **No calendar surface** — techs and owners live in Google/Apple/Outlook
+   calendars; the schedule is invisible outside the app.
+3. **No geography** — properties have addresses but no geocoding; the board
+   knows nothing about drive time, so assignment quality depends entirely on
+   the dispatcher's mental map.
+4. **Assignment is manual** — no skill/cert matching, no load balancing, no
+   emergency-insertion help.
+5. **No coexistence path** — a shop already on Jobber/ServiceTitan can't pilot
+   alongside or migrate incrementally (jobs connectors are stubs).
+
+---
+
+## 2. The integration space, analyzed
+
+Evaluated on: current API availability, auth model, build effort, and value to
+dispatch specifically. Constraint alignment: every integration stays **optional**
+(standalone-first), **typed** on the connector interface, and **loud on
+failure**; anything customer-facing keeps flowing through the approval-gated
+egress queue.
+
+### Tier 1 — build first (high value, low friction)
+
+| Integration | What it does for dispatch | API/auth | Effort | Notes |
+|---|---|---|---|---|
+| **ICS calendar feeds** (universal) | Per-tech + whole-org read-only feed URL; subscribable from **Apple Calendar, Google Calendar, Outlook, and anything else** | None — signed, unguessable HTTPS feed we serve | **S** | The 80% calendar win in one move. Apple has **no public REST API**, so ICS is the only zero-friction Apple path; iCloud CalDAV needs per-user app-specific passwords. |
+| **Twilio SMS (real)** | Real on-my-way texts with live ETA, booking confirmations, day-before reminders | API key (already a descriptor) | **S–M** | Turns the simulated `EN_ROUTE` text into the killer dispatch feature. All sends stay approval-policy-controlled (auto-allow templated transactional, gate free-text). |
+| **Google Calendar (two-way)** | Job assignments appear in each tech's Google Calendar; edits/conflicts visible; busy-blocks respected on assignment | OAuth 2.0 per org/user; stable v3 API | **M** | The dominant SMB calendar. Push notifications (watch channels) enable near-real-time sync back. |
+| **Google Maps Geocoding + Routes** | Geocode properties once; show drive-time between consecutive jobs on the board; warn on impossible schedules | API key | **S–M** | Foundation for everything routing. Routes API prices per element; light usage at shop scale. |
+
+### Tier 2 — next (high value, moderate friction)
+
+| Integration | What it does for dispatch | API/auth | Effort | Notes |
+|---|---|---|---|---|
+| **Microsoft 365 / Outlook (Graph)** | Two-way calendar for shops on Microsoft | OAuth 2.0 (Graph) | **M** | Same adapter shape as Google; do second. |
+| **Google Route Optimization API** | True multi-stop, multi-tech day optimization (VRP): time windows, priorities, shift bounds | GCP service account | **M** | Purpose-built fleet routing (formerly Cloud Fleet Routing); per-shipment pricing. The "pro" engine behind AI routing. |
+| **OSRM/VROOM (self-hosted)** | Same class of route optimization at **zero marginal cost** | None (self-hosted) | **M** | Open-source fallback/default so routing costs nothing until a shop opts into Google-grade traffic awareness. |
+| **Jobber (live)** | Import/sync jobs, clients, visits — pilot alongside or migrate from Jobber | GraphQL + OAuth 2.0, webhooks | **M** | Open developer program; webhooks make near-live coexistence practical. Upgrade existing stub to live. |
+| **iCloud CalDAV (push)** | True event *push* into Apple Calendar for techs who want more than the ICS feed | App-specific password per user (`caldav.icloud.com`) | **M** | Optional add-on; ICS remains the default Apple path. |
+
+### Tier 3 — later / situational
+
+| Integration | Why later | Notes |
+|---|---|---|
+| **ServiceTitan (live)** | Highest-friction API: developer-portal app registration + per-tenant approval + app key. Worth it when a target customer is on ST | Position as **migration/coexistence**, not long-term sync; upgrade existing stub |
+| **Housecall Pro (live)** | Smaller overlap audience; simple token API | Upgrade stub when demand appears |
+| **CRM activity write-back** (HubSpot/Odoo) | Nice-to-have: log "job booked/completed" on the CRM timeline | Small extension of existing live CRM connectors |
+| **Slack/Teams alerts** | Emergency-job broadcast to an ops channel | Trivial webhook; do opportunistically |
+| **Outbound webhooks / Zapier** | Long-tail "connect anything" | One generic signed-webhook emitter covers hundreds of tools |
+
+**Explicitly not worth building:** a native Apple "API" integration (doesn't
+exist — EventKit is on-device only), and CRM-driven dispatch (scheduling
+belongs in core; CRMs get read-only visibility).
+
+---
+
+## 3. Making dispatch more valuable: the functionality plan
+
+Sequenced so each phase ships standalone value and feeds the next.
+
+### Phase D1 — The communication loop (weeks 1–2)
+The board learns to talk. Real Twilio sends behind the existing egress policy:
+- **On-my-way SMS** with tech name + live ETA when a job goes `EN_ROUTE`
+- **Booking confirmation** SMS/email on `assignJob` / `bookJob`
+- **Day-before reminder** (scheduled sweep)
+- Delivery status surfaced on the job card; failures loud, never silent
+- Templated transactional messages auto-approved by policy; free-text still gated
+
+### Phase D2 — The calendar spine (weeks 2–4)
+- **ICS feeds**: `/api/calendar/tech/<signed-token>.ics` + org-wide feed —
+  subscribable from Apple/Google/Outlook immediately, revocable per token
+- **Google Calendar two-way**: org connects via OAuth; each assignment creates/
+  updates a calendar event; tech busy-blocks show on the dispatch board as
+  soft conflicts
+- **Outlook via Graph** with the same adapter interface
+
+### Phase D3 — Geography on the board (weeks 4–6)
+- Geocode properties on create (cache lat/lng on the row)
+- Day-map view per tech; drive-time chips between consecutive jobs
+- **Conflict warnings**: overlapping windows, impossible back-to-backs
+  ("Job B starts 15 min after Job A ends, but it's a 40-min drive")
+
+### Phase D4 — AI-assisted dispatch (weeks 6–10) — the option you asked about
+Philosophy: **the AI proposes, the dispatcher disposes** — same human-gated
+pattern as OrgMemory and the approvals queue. Never auto-assign.
+
+1. **Smart assign** (per job): rank techs by a transparent score —
+   drive time from previous stop · cert/skill match (certifications +
+   pack job-type affinity) · current load · priority/SLA fit — shown as
+   *"Suggested: Jake (12 min away, W&M certified, 2 jobs today)"* with one-tap
+   accept.
+2. **Emergency insertion**: for an `EMERGENCY` booking, compute the
+   least-disruption slot across all techs ("Luis can absorb it — pushes one
+   NORMAL job 45 min; Jake would cascade two jobs").
+3. **Optimize my day** (per tech or whole board): one button reorders a day's
+   stops via the routing engine (VROOM self-hosted by default; Google Route
+   Optimization API as the premium traffic-aware option), presented as a
+   **diff** — current vs. proposed with minutes saved — applied only on accept.
+4. **Anomaly nudges**: quiet flags, not modals — "3 unassigned jobs are aging
+   past 48h", "Friday is overbooked for the crew size".
+5. All suggestions and accept/reject decisions **audited**, which doubles as
+   training signal for tuning the score weights per shop.
+
+Cost note: with VROOM/OSRM as default, AI routing has ~zero marginal cost;
+Google's optimizer becomes an opt-in whose per-use cost passes through at cost
+— consistent with the Plumb Zebra pilot economics.
+
+### Phase D5 — FSM coexistence (when a prospect needs it)
+Live Jobber sync (import clients/jobs, webhook near-live updates) first;
+ServiceTitan migration tooling when a real ST shop is at the table.
+
+---
+
+## 4. Risks & mitigations
+
+- **SMS compliance (A2P 10DLC)** — US SMS requires campaign registration;
+  transactional service messages are the easy category. Bake opt-out handling in.
+- **Calendar sync loops** — two-way sync must tag app-owned events and ignore
+  echoes; ICS-first strategy avoids the problem for v1.
+- **ServiceTitan partner approval lead time** — start the portal application
+  early if an ST-shop prospect appears; don't block roadmap on it.
+- **Routing cost creep** — default to self-hosted VROOM; meter and pass through
+  any Google optimizer usage at cost.
+- **Trust in AI suggestions** — transparent score breakdown + diff-style
+  previews + never auto-apply. Suggestion quality is auditable from day one.
+
+## 5. Sources
+
+- ServiceTitan developer portal & access model: developer.servicetitan.io
+  (Getting Access, Environments, FAQs); help.servicetitan.com (API dev portal V2)
+- Jobber developer center: developer.getjobber.com (GraphQL API, OAuth 2.0 app
+  authorization, webhooks)
+- Google Route Optimization API: developers.google.com/maps/documentation/route-optimization
+  (overview, usage & billing, cost model); Routes API usage & billing
+- Apple calendar integration reality (no public REST API; CalDAV via
+  app-specific passwords; EventKit on-device): developer.apple.com (CalDAV,
+  EventKit, forums), nylas/aurinko/onecal CalDAV guides
