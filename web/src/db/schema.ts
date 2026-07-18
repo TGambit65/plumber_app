@@ -240,6 +240,8 @@ export const jobs = pgTable("jobs", {
   claimId: text("claim_id").references(() => claims.id), // insurance claim linkage (core)
   scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
   scheduledEnd: timestamp("scheduled_end", { withTimezone: true }),
+  /** External calendar event id (D2) — the pushed Google/Outlook event for this job. */
+  calendarEventId: text("calendar_event_id"),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
@@ -1116,6 +1118,30 @@ export const outboundMessages = pgTable("outbound_messages", {
  * (constraint 8: approval-gated), converting lines to estimate_line_items.
  * `buyerCookie` is the unguessable capability token the supplier echoes back.
  */
+// ── Calendar feeds (dispatch D2 — ICS spine) ─────────────────────────────────
+
+/**
+ * A subscribable ICS feed (Apple/Google/Outlook "subscribe by URL"). The
+ * unguessable token IS the capability — calendar clients can't log in — and
+ * revoking a row kills the URL immediately. Scope: one tech's schedule or the
+ * whole org's board.
+ */
+export const calendarFeeds = pgTable("calendar_feeds", {
+  id: id(),
+  organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),
+  scope: text("scope").notNull(), // 'TECH' | 'ORG'
+  userId: text("user_id").references(() => users.id, { onDelete: "cascade" }), // set when scope=TECH
+  token: text("token").notNull().unique(),
+  createdById: text("created_by_id").notNull().references(() => users.id),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const calendarFeedsRelations = relations(calendarFeeds, ({ one }) => ({
+  user: one(users, { fields: [calendarFeeds.userId], references: [users.id] }),
+  createdBy: one(users, { fields: [calendarFeeds.createdById], references: [users.id] }),
+}));
+
 export const punchoutSessions = pgTable("punchout_sessions", {
   id: id(),
   organizationId: text("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }).default(sql`current_setting('app.current_org', true)`),

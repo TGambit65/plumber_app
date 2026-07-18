@@ -130,13 +130,30 @@ vendor-shaped mock Twilio:
 Verified: confirmation/on-my-way/reminder round-trips, dedupe, opt-out honored
 (SKIPPED_OPTOUT recorded, nothing sent), forged-signature rejection.
 
-### Phase D2 — The calendar spine (weeks 2–4)
-- **ICS feeds**: `/api/calendar/tech/<signed-token>.ics` + org-wide feed —
-  subscribable from Apple/Google/Outlook immediately, revocable per token
-- **Google Calendar two-way**: org connects via OAuth; each assignment creates/
-  updates a calendar event; tech busy-blocks show on the dispatch board as
-  soft conflicts
-- **Outlook via Graph** with the same adapter interface
+### Phase D2 — The calendar spine ✅ DONE (2026-07-18)
+Shipped and verified end-to-end:
+- **ICS feeds** (`src/lib/calendar/ics.ts`, `/api/calendar/[token]`) — RFC 5545
+  generator (escaping, 75-octet folding, UTC, CANCELLED status); per-tech +
+  whole-org feeds subscribable from **Apple Calendar, Google Calendar, Outlook**
+  with zero auth (the unguessable token is the capability, resolved via a
+  SECURITY DEFINER lookup; revoking in Settings 404s the URL immediately).
+  Managed from Settings → Integrations → Calendar feeds.
+- **Google Calendar connector** (`google-calendar.ts`, `calendar` capability on
+  the typed interface: upsertEvent/deleteEvent/listBusy) — OAuth refresh-token
+  → cached access token, Events insert/PATCH, freeBusy. Secrets encrypted at
+  rest; loud degraded failures.
+- **Outlook / Microsoft 365 connector** (`outlook-calendar.ts`) — Microsoft
+  Graph, same adapter shape (calendarView busy read filters showAs=free).
+- **Event push** (`src/lib/calendar/push.ts`) — assignJob/bookJob mirror the
+  job into the org's connected calendar (title, tech, location, times); the
+  provider event id is stored on the job so reschedules PATCH the same event.
+  Calendar failures never block dispatch.
+- **Busy-window soft conflicts** — the dispatch board shows the day's external
+  busy windows and flags overlapping jobs with a ⚠️ marker (never blocking).
+Verified: 74 unit/integration tests (ICS RFC compliance; both connectors vs
+vendor-shaped mocks incl. token refresh, PATCH-vs-POST, token caching, 401s) +
+12-check Playwright e2e (feed create/serve/subset/revoke-404, real event push
+with stored id, busy strip + conflict flags).
 
 ### Phase D3 — Geography on the board (weeks 4–6)
 - Geocode properties on create (cache lat/lng on the row)

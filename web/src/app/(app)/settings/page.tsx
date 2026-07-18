@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { headers } from "next/headers";
 import { db, t, withTenant } from "@/db";
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { createCalendarFeed, revokeCalendarFeed } from "@/lib/actions/calendar";
 import { requireSession } from "@/lib/auth";
 import type { Role } from "@/lib/auth";
 import {
@@ -439,10 +440,21 @@ function ConnectorCard({ connector, conn }: { connector: Connector; conn?: Conne
 }
 
 async function IntegrationsTab({ organizationId }: { organizationId: string }) {
-  const all = await withTenant(organizationId, (tx) =>
-    tx.query.integrationConnections.findMany({
-      orderBy: asc(t.integrationConnections.provider),
-    })
+  const [all, feeds, feedTechs] = await withTenant(organizationId, (tx) =>
+    Promise.all([
+      tx.query.integrationConnections.findMany({
+        orderBy: asc(t.integrationConnections.provider),
+      }),
+      tx.query.calendarFeeds.findMany({
+        where: isNull(t.calendarFeeds.revokedAt),
+        with: { user: true },
+        orderBy: asc(t.calendarFeeds.createdAt),
+      }),
+      tx.query.users.findMany({
+        where: and(eq(t.users.role, "TECH"), eq(t.users.active, true)),
+        orderBy: asc(t.users.name),
+      }),
+    ])
   );
   const orgMemory = all.find((c) => c.provider === "ORGMEMORY");
   const orgCfg = (orgMemory?.config ?? {}) as { gatewayUrl?: string; token?: string; namespace?: string };
@@ -509,6 +521,56 @@ async function IntegrationsTab({ organizationId }: { organizationId: string }) {
           implementation; the others are demo stubs returning sample data until real credentials land. Synced CRM
           records flow into OrgMemory (when connected) as provenance-tagged <em>staged</em> candidates — never
           auto-canon.
+        </CardBody>
+      </Card>
+
+      {/* Calendar feeds (D2) — subscribable from Apple/Google/Outlook */}
+      <Card className="border-cyan-200">
+        <CardHeader
+          title="🗓️ Calendar feeds (ICS)"
+          subtitle="Subscribe-by-URL schedules for Apple Calendar, Google Calendar, Outlook, and any other calendar app. Revoking a feed kills its URL immediately."
+        />
+        <CardBody className="space-y-3">
+          {feeds.length === 0 ? (
+            <p className="text-sm text-slate-500">No feeds yet — create one below and paste the URL into your calendar app&apos;s &ldquo;subscribe&rdquo; box.</p>
+          ) : (
+            <ul className="space-y-2">
+              {feeds.map((f) => (
+                <li key={f.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 p-2.5">
+                  <Badge tone={f.scope === "ORG" ? "violet" : "blue"}>
+                    {f.scope === "ORG" ? "Whole schedule" : `Tech: ${f.user?.name ?? "?"}`}
+                  </Badge>
+                  <code className="min-w-0 flex-1 truncate rounded bg-slate-50 px-2 py-1 text-xs text-slate-600">
+                    /api/calendar/{f.token}
+                  </code>
+                  <form action={revokeCalendarFeed}>
+                    <input type="hidden" name="feedId" value={f.id} />
+                    <Button type="submit" size="sm" variant="secondary">Revoke</Button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex flex-wrap items-end gap-2 border-t border-slate-100 pt-3">
+            <form action={createCalendarFeed}>
+              <input type="hidden" name="scope" value="ORG" />
+              <Button type="submit" size="sm">＋ Whole-schedule feed</Button>
+            </form>
+            <form action={createCalendarFeed} className="flex items-end gap-2">
+              <input type="hidden" name="scope" value="TECH" />
+              <div className="w-48">
+                <Field label="Per-tech feed">
+                  <Select name="userId" required defaultValue="">
+                    <option value="" disabled>Choose tech…</option>
+                    {feedTechs.map((u) => (
+                      <option key={u.id} value={u.id}>{u.name}</option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+              <Button type="submit" size="sm" variant="secondary">＋ Create</Button>
+            </form>
+          </div>
         </CardBody>
       </Card>
 

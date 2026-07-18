@@ -40,6 +40,8 @@ DECLARE
     'outbound_messages',
     -- supplier punchout (buyer-cookie lookup goes through punchout_session_by_cookie below)
     'punchout_sessions',
+    -- ICS calendar feeds (token lookup goes through calendar_feed_by_token below)
+    'calendar_feeds',
     -- claims (PII-sensitive) & compliance
     'carriers', 'adjusters', 'claims', 'claim_supplements',
     'inspection_templates', 'inspections', 'certifications',
@@ -93,3 +95,19 @@ $fn$;
 
 REVOKE ALL ON FUNCTION punchout_session_by_cookie(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION punchout_session_by_cookie(text) TO plumber;
+
+-- ICS feed fetch: calendar clients subscribe with NO session — the unguessable
+-- feed token is the capability. This is the ONLY global read of
+-- calendar_feeds; the route immediately re-enters withTenant(org) for data.
+CREATE OR REPLACE FUNCTION calendar_feed_by_token(p_token text)
+RETURNS TABLE (id text, organization_id text, scope text, user_id text, revoked_at timestamptz)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $fn$
+  SELECT id, organization_id, scope, user_id, revoked_at FROM calendar_feeds
+  WHERE token = p_token LIMIT 1;
+$fn$;
+
+REVOKE ALL ON FUNCTION calendar_feed_by_token(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION calendar_feed_by_token(text) TO plumber;

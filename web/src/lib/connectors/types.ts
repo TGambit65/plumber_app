@@ -14,7 +14,7 @@
 
 // ── Capabilities ─────────────────────────────────────────────────────────────
 
-export type ConnectorCapability = "crm" | "accounting" | "jobs" | "messaging" | "pm" | "procurement";
+export type ConnectorCapability = "crm" | "accounting" | "jobs" | "messaging" | "pm" | "procurement" | "calendar";
 
 export const CAPABILITY_LABELS: Record<ConnectorCapability, string> = {
   crm: "CRM",
@@ -23,6 +23,7 @@ export const CAPABILITY_LABELS: Record<ConnectorCapability, string> = {
   messaging: "Messaging",
   pm: "Project management",
   procurement: "Suppliers / procurement",
+  calendar: "Calendars",
 };
 
 // ── Descriptor (drives the integrations hub UI) ──────────────────────────────
@@ -176,6 +177,33 @@ export interface PmOps {
   pushTask(task: ExternalTask): Promise<PushResult>;
 }
 
+// Calendar (dispatch D2): push schedule events + read busy windows.
+
+export interface ExternalCalendarEvent {
+  /** Present when updating a known remote event; absent → create. */
+  externalId?: string;
+  title: string;
+  start: Date;
+  end: Date;
+  location?: string;
+  description?: string;
+}
+
+export interface BusyWindow {
+  start: Date;
+  end: Date;
+  /** Event title when the provider exposes it (Graph); may be absent (freeBusy). */
+  title?: string;
+}
+
+export interface CalendarOps {
+  /** Create or update the event; returns the provider event id. */
+  upsertEvent(e: ExternalCalendarEvent): Promise<PushResult>;
+  deleteEvent(externalId: string): Promise<PushResult>;
+  /** Busy windows on the connected calendar between the bounds. */
+  listBusy(timeMin: Date, timeMax: Date): Promise<PullResult<BusyWindow>>;
+}
+
 /** Supplier punchout: start a cXML catalog session; the cart returns via BrowserFormPost. */
 export interface ProcurementOps {
   setupPunchout(params: {
@@ -201,6 +229,7 @@ export interface Connector {
   jobs?: (config: ConnectorConfig) => JobsOps;
   pm?: (config: ConnectorConfig) => PmOps;
   procurement?: (config: ConnectorConfig) => ProcurementOps;
+  calendar?: (config: ConnectorConfig) => CalendarOps;
 }
 
 /** Shared helper: which required config fields are missing? */

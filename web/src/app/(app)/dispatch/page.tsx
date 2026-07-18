@@ -5,6 +5,8 @@ import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { assignJob, bookJob } from "@/lib/actions/office";
 import { sendTomorrowReminders } from "@/lib/actions/comms";
+import { busyWindowsForDay, overlapsBusy } from "@/lib/calendar/push";
+import { fmtTime } from "@/lib/format";
 import { enabledJobTypes, enabledPacks } from "@/lib/trade-packs";
 import {
   Avatar,
@@ -106,10 +108,16 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
   // Pack composition: job types + enabled-pack chips come from the org's ENABLED
   // trade packs only (constraints 1 & 12). Apex → plumbing+sewer, Summit →
   // hvac+plumbing, American Automators → aa_field_ops ONLY (no plumbing leakage).
-  const [jobTypes, packs] = await Promise.all([
+  const [jobTypes, packs, busy] = await Promise.all([
     enabledJobTypes(session.organizationId),
     enabledPacks(session.organizationId),
+    // D2: the org calendar's busy windows for this day (null when no calendar connected).
+    busyWindowsForDay(session.organizationId, day),
   ]);
+  const busyWindows = busy?.windows ?? [];
+  const conflictedJobIds = new Set(
+    dayJobs.filter((j) => overlapsBusy(j.scheduledAt, j.scheduledEnd, busyWindows)).map((j) => j.id)
+  );
 
   const statusCounts = dayJobs.reduce<Record<string, number>>((acc, j) => {
     acc[j.status] = (acc[j.status] ?? 0) + 1;
@@ -171,6 +179,28 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
         <Stat label="Completed" value={statusCounts["COMPLETED"] ?? 0} tone="good" />
         <Stat label="Emergencies open" value={emergencies.length} tone={emergencies.length > 0 ? "bad" : "default"} />
       </div>
+
+      {/* D2: external calendar busy windows — soft conflicts, never blocking */}
+      {busy ? (
+        <div className="mb-4 rounded-lg border border-cyan-200 bg-cyan-50/60 px-3 py-2 text-xs">
+          <span className="font-semibold text-cyan-900">🗓️ {busy.provider === "GOOGLE_CALENDAR" ? "Google Calendar" : "Outlook"} busy windows</span>{" "}
+          {busyWindows.length === 0 ? (
+            <span className="text-cyan-700">— none this day</span>
+          ) : (
+            <span className="text-cyan-800">
+              {busyWindows.map((w, i) => (
+                <span key={i} className="mr-2 inline-block rounded bg-white/70 px-1.5 py-0.5">
+                  {fmtTime(w.start)}–{fmtTime(w.end)}
+                  {w.title ? ` ${w.title}` : ""}
+                </span>
+              ))}
+              {conflictedJobIds.size > 0 ? (
+                <span className="ml-1 font-semibold text-amber-700">⚠️ {conflictedJobIds.size} job(s) overlap</span>
+              ) : null}
+            </span>
+          )}
+        </div>
+      ) : null}
 
       {/* Legend */}
       <div className="mb-4 flex flex-wrap items-center gap-1.5">
@@ -257,7 +287,16 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
                 {jobsForTech.length === 0 ? (
                   <EmptyState title="No jobs this day" hint="Assign from the unassigned lane." />
                 ) : (
-                  jobsForTech.map((job) => <DispatchJobCard key={job.id} job={job} />)
+                  jobsForTech.map((job) => (
+                    <div key={job.id}>
+                      {conflictedJobIds.has(job.id) ? (
+                        <div className="mb-0.5 rounded-t-md bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                          ⚠️ Overlaps a calendar busy window
+                        </div>
+                      ) : null}
+                      <DispatchJobCard job={job} />
+                    </div>
+                  ))
                 )}
               </div>
             </div>

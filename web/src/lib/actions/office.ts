@@ -12,6 +12,7 @@ import { lineTotal, money, fmtDateTime } from "@/lib/format";
 import { enabledCustomFieldDefs, enabledEquipmentKinds } from "@/lib/trade-packs";
 import { validateCustomFieldValues } from "@/lib/custom-fields";
 import { orgName, sendTransactionalSms } from "@/lib/comms/sms";
+import { pushJobToCalendar } from "@/lib/calendar/push";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 
@@ -88,6 +89,9 @@ export async function assignJob(formData: FormData) {
       address: job.property.address,
     },
   });
+
+  // D2: mirror the assignment into the org's connected calendar (no-op when none).
+  await pushJobToCalendar(session.organizationId, jobId);
 
   revalidatePath("/dispatch");
   revalidatePath("/jobs");
@@ -173,6 +177,9 @@ export async function bookJob(formData: FormData) {
       },
     });
   }
+
+  // D2: mirror scheduled bookings into the org's connected calendar.
+  if (scheduledAt) await pushJobToCalendar(session.organizationId, created.job.id);
 
   revalidatePath("/dispatch");
   revalidatePath("/jobs");
