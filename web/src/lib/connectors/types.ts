@@ -14,7 +14,7 @@
 
 // ── Capabilities ─────────────────────────────────────────────────────────────
 
-export type ConnectorCapability = "crm" | "accounting" | "jobs" | "messaging" | "pm" | "procurement" | "calendar";
+export type ConnectorCapability = "crm" | "accounting" | "jobs" | "messaging" | "pm" | "procurement" | "calendar" | "geo";
 
 export const CAPABILITY_LABELS: Record<ConnectorCapability, string> = {
   crm: "CRM",
@@ -24,6 +24,7 @@ export const CAPABILITY_LABELS: Record<ConnectorCapability, string> = {
   pm: "Project management",
   procurement: "Suppliers / procurement",
   calendar: "Calendars",
+  geo: "Maps & routing",
 };
 
 // ── Descriptor (drives the integrations hub UI) ──────────────────────────────
@@ -196,6 +197,20 @@ export interface BusyWindow {
   title?: string;
 }
 
+// Geo (dispatch D3): geocoding + routed drive times.
+
+export interface GeoPoint {
+  lat: number;
+  lng: number;
+}
+
+export interface GeoOps {
+  /** Address → coordinates. */
+  geocode(address: string): Promise<{ ok: boolean; degraded: boolean; point?: GeoPoint; message?: string }>;
+  /** Routed drive time in minutes between two points. */
+  driveMinutes(from: GeoPoint, to: GeoPoint): Promise<{ ok: boolean; degraded: boolean; minutes?: number; message?: string }>;
+}
+
 export interface CalendarOps {
   /** Create or update the event; returns the provider event id. */
   upsertEvent(e: ExternalCalendarEvent): Promise<PushResult>;
@@ -230,6 +245,7 @@ export interface Connector {
   pm?: (config: ConnectorConfig) => PmOps;
   procurement?: (config: ConnectorConfig) => ProcurementOps;
   calendar?: (config: ConnectorConfig) => CalendarOps;
+  geo?: (config: ConnectorConfig) => GeoOps;
 }
 
 /** Shared helper: which required config fields are missing? */

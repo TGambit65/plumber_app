@@ -13,6 +13,7 @@ import { enabledCustomFieldDefs, enabledEquipmentKinds } from "@/lib/trade-packs
 import { validateCustomFieldValues } from "@/lib/custom-fields";
 import { orgName, sendTransactionalSms } from "@/lib/comms/sms";
 import { pushJobToCalendar } from "@/lib/calendar/push";
+import { geocodeProperty } from "@/lib/geo/service";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 
@@ -224,16 +225,21 @@ export async function addProperty(formData: FormData) {
   const state = str(formData, "state");
   const zip = str(formData, "zip");
   if (!customerId || !address || !city || !state || !zip) return;
-  await withTenant(session.organizationId, (tx) =>
-    tx.insert(t.properties).values({
-      customerId,
-      label: str(formData, "label") || null,
-      address,
-      city,
-      state,
-      zip,
-    })
+  const [created] = await withTenant(session.organizationId, (tx) =>
+    tx
+      .insert(t.properties)
+      .values({
+        customerId,
+        label: str(formData, "label") || null,
+        address,
+        city,
+        state,
+        zip,
+      })
+      .returning({ id: t.properties.id })
   );
+  // D3: geocode + cache coordinates (no-op when no geo connector is connected).
+  await geocodeProperty(session.organizationId, created.id);
   await logActivity({
     kind: "SYSTEM",
     body: `Property added: ${address}, ${city}`,

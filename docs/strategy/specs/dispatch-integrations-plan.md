@@ -155,11 +155,32 @@ vendor-shaped mocks incl. token refresh, PATCH-vs-POST, token caching, 401s) +
 12-check Playwright e2e (feed create/serve/subset/revoke-404, real event push
 with stored id, busy strip + conflict flags).
 
-### Phase D3 — Geography on the board (weeks 4–6)
-- Geocode properties on create (cache lat/lng on the row)
-- Day-map view per tech; drive-time chips between consecutive jobs
-- **Conflict warnings**: overlapping windows, impossible back-to-backs
-  ("Job B starts 15 min after Job A ends, but it's a 40-min drive")
+### Phase D3 — Geography on the board ✅ DONE (2026-07-19)
+Shipped and verified end-to-end:
+- **Coordinates on properties** (`lat/lng/geocodedAt`); geocode-on-create hook
+  caches coordinates via the geo connector; seed ships demo coords.
+- **New `geo` capability** + **GOOGLE_MAPS connector** — real Geocoding API +
+  Routes API v2 (computeRoutes with X-Goog-FieldMask); key encrypted at rest.
+- **Honest drive times** (`src/lib/geo/`): routed via Google Maps when
+  connected; otherwise a haversine ESTIMATE (winding factor + stop overhead)
+  that the UI explicitly labels "est." — a guess is never presented as routing.
+- **Chain analysis** — per-tech consecutive-job hops classified
+  ok / tight (<10 min slack) / **impossible** (gap < drive) / unknown (no
+  coords); chips between cards on the board, red "⛔ Can't make it" flags.
+- **Day map** — self-contained SVG (no external tiles, works offline):
+  stops plotted in visit order, one color per tech.
+Verified: 82 unit/integration tests (geo math incl. chain classification;
+GOOGLE_MAPS vs vendor-shaped mock) + 12-check Playwright e2e — estimate mode
+labels + naturally-occurring impossible hop flagged; connecting the (mock)
+Maps connector switches chips to routed times, clears the flag when routing
+says the hop fits, and geocodes new properties on create.
+
+> **Incident hardening (2026-07-19):** an environment restart dropped RLS
+> flags from the database; the `db:verify-rls` guard caught cross-tenant
+> visibility on the dispatch board during D3 verification. Fixed by
+> re-applying `db:rls`, and institutionalized: `npm run db:push` now chains
+> the RLS coverage guard, and **seeding refuses to run** against a database
+> whose tenant tables aren't FORCE-RLS-protected (loud pre-flight in seed.ts).
 
 ### Phase D4 — AI-assisted dispatch (weeks 6–10) — the option you asked about
 Philosophy: **the AI proposes, the dispatcher disposes** — same human-gated

@@ -33,6 +33,19 @@ async function setOrg(orgId: string) {
 async function main() {
   await client.connect();
 
+  // RLS PRE-FLIGHT: never seed a database whose row security has been dropped
+  // (e.g. by a table-recreating drizzle push). Without this, multi-tenant data
+  // would be visible across orgs the moment the app starts. Fail LOUDLY.
+  const rlsCheck = await client.query(
+    `SELECT relrowsecurity AND relforcerowsecurity AS ok FROM pg_class WHERE relname = 'jobs'`
+  );
+  if (!rlsCheck.rows[0]?.ok) {
+    throw new Error(
+      "REFUSING TO SEED: row-level security is not enforced on tenant tables. " +
+        "Run `npm run db:rls` (re-applies FORCE RLS + policies), then reseed."
+    );
+  }
+
   console.log("Clearing existing data…");
   await db.execute(sql`
     TRUNCATE TABLE
@@ -235,17 +248,17 @@ async function main() {
   const propRows = await db
     .insert(t.properties)
     .values([
-      { customerId: helen.id, address: "412 Sycamore Ln", city: "Riverton", state: "OH", zip: "45201", petNotes: "Dog: Biscuit (friendly)", shutoffLocation: "Basement, NE corner behind shelving", accessNotes: "Use side door; front porch step is loose" },
-      { customerId: boyd.id, address: "88 Cliffside Dr", city: "Riverton", state: "OH", zip: "45201", gateCode: "4482", shutoffLocation: "Garage wall by water heater", parkingNotes: "Park on street — steep driveway" },
-      { customerId: gerald.id, address: "2203 Fernwood Ave", city: "Maple Falls", state: "OH", zip: "45222", shutoffLocation: "Crawlspace access in hall closet" },
-      { customerId: sandra.id, address: "15 Birchwood Ct", city: "Riverton", state: "OH", zip: "45201", petNotes: "Two cats — keep doors closed" },
-      { customerId: ravi.id, address: "731 Alder St", city: "Maple Falls", state: "OH", zip: "45222", gateCode: "1177" },
-      { customerId: maria.id, address: "9 Quarry Rd", city: "Riverton", state: "OH", zip: "45203" },
-      { customerId: bill.id, address: "504 Dover Pl", city: "Riverton", state: "OH", zip: "45201" },
-      { customerId: lakeview.id, label: "Lakeview Apartments — Bldg A", address: "1200 Lakeview Pkwy", city: "Riverton", state: "OH", zip: "45204", accessNotes: "Check in at leasing office for unit keys", parkingNotes: "Service vehicles: lot C" },
-      { customerId: lakeview.id, label: "Lakeview Apartments — Bldg B", address: "1220 Lakeview Pkwy", city: "Riverton", state: "OH", zip: "45204" },
-      { customerId: hartman.id, label: "Jobsite: Willow Creek Phase 2", address: "Willow Creek Dr & Rte 9", city: "Maple Falls", state: "OH", zip: "45222", accessNotes: "Hard hats required. Site super: Denny 555-3010" },
-      { customerId: bluebird.id, address: "77 Main St", city: "Riverton", state: "OH", zip: "45201", accessNotes: "Service entrance in alley; kitchen closes 3-5pm" },
+      { customerId: helen.id, address: "412 Sycamore Ln", lat: 47.6588, lng: -117.426, city: "Riverton", state: "OH", zip: "45201", petNotes: "Dog: Biscuit (friendly)", shutoffLocation: "Basement, NE corner behind shelving", accessNotes: "Use side door; front porch step is loose" },
+      { customerId: boyd.id, address: "88 Cliffside Dr", lat: 47.691, lng: -117.4025, city: "Riverton", state: "OH", zip: "45201", gateCode: "4482", shutoffLocation: "Garage wall by water heater", parkingNotes: "Park on street — steep driveway" },
+      { customerId: gerald.id, address: "2203 Fernwood Ave", lat: 47.7132, lng: -117.3251, city: "Maple Falls", state: "OH", zip: "45222", shutoffLocation: "Crawlspace access in hall closet" },
+      { customerId: sandra.id, address: "15 Birchwood Ct", lat: 47.6499, lng: -117.4443, city: "Riverton", state: "OH", zip: "45201", petNotes: "Two cats — keep doors closed" },
+      { customerId: ravi.id, address: "731 Alder St", lat: 47.7069, lng: -117.3106, city: "Maple Falls", state: "OH", zip: "45222", gateCode: "1177" },
+      { customerId: maria.id, address: "9 Quarry Rd", lat: 47.6231, lng: -117.5122, city: "Riverton", state: "OH", zip: "45203" },
+      { customerId: bill.id, address: "504 Dover Pl", lat: 47.6674, lng: -117.4098, city: "Riverton", state: "OH", zip: "45201" },
+      { customerId: lakeview.id, label: "Lakeview Apartments — Bldg A", address: "1200 Lakeview Pkwy", lat: 47.6395, lng: -117.4787, city: "Riverton", state: "OH", zip: "45204", accessNotes: "Check in at leasing office for unit keys", parkingNotes: "Service vehicles: lot C" },
+      { customerId: lakeview.id, label: "Lakeview Apartments — Bldg B", address: "1220 Lakeview Pkwy", lat: 47.6402, lng: -117.4796, city: "Riverton", state: "OH", zip: "45204" },
+      { customerId: hartman.id, label: "Jobsite: Willow Creek Phase 2", address: "Willow Creek Dr & Rte 9", lat: 47.7368, lng: -117.2894, city: "Maple Falls", state: "OH", zip: "45222", accessNotes: "Hard hats required. Site super: Denny 555-3010" },
+      { customerId: bluebird.id, address: "77 Main St", lat: 47.658, lng: -117.4185, city: "Riverton", state: "OH", zip: "45201", accessNotes: "Service entrance in alley; kitchen closes 3-5pm" },
     ])
     .returning();
   const [pHelen, pBoyd, pGerald, pSandra, pRavi, pMaria, pBill, pLakeA, , pWillow, pBluebird] = propRows;

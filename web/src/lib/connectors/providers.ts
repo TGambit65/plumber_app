@@ -23,6 +23,7 @@ import { cxmlSupplierConnector } from "./cxml-supplier";
 import { twilioConnector } from "./twilio";
 import { googleCalendarConnector } from "./google-calendar";
 import { outlookCalendarConnector } from "./outlook-calendar";
+import { googleMapsConnector } from "./google-maps";
 
 /**
  * Connector registry. Odoo (JSON-RPC), HubSpot (CRM v3 REST) and QuickBooks
@@ -189,6 +190,9 @@ export const REGISTRY: Record<string, Connector> = {
   GOOGLE_CALENDAR: googleCalendarConnector,
   OUTLOOK_CALENDAR: outlookCalendarConnector,
 
+  // Maps & routing (D3) — real Geocoding + Routes API implementation.
+  GOOGLE_MAPS: googleMapsConnector,
+
   XERO: makeStub({
     descriptor: {
       provider: "XERO",
@@ -317,7 +321,7 @@ export function getConnector(provider: string): Connector | undefined {
   return REGISTRY[provider];
 }
 
-const CAPABILITY_ORDER: ConnectorCapability[] = ["crm", "accounting", "calendar", "procurement", "jobs", "messaging", "pm"];
+const CAPABILITY_ORDER: ConnectorCapability[] = ["crm", "accounting", "calendar", "geo", "procurement", "jobs", "messaging", "pm"];
 
 /** Registry grouped by capability, in hub display order (CRM first — required). */
 export function listByCapability(): Array<{ capability: ConnectorCapability; connectors: Connector[] }> {

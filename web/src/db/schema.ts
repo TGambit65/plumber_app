@@ -116,6 +116,10 @@ export const properties = pgTable("properties", {
   shutoffLocation: text("shutoff_location"),
   parkingNotes: text("parking_notes"),
   petNotes: text("pet_notes"),
+  // D3: cached geocode (via the geo connector when connected; seed provides demo coords).
+  lat: doublePrecision("lat"),
+  lng: doublePrecision("lng"),
+  geocodedAt: timestamp("geocoded_at", { withTimezone: true }),
 });
 
 export const equipment = pgTable("equipment", {

@@ -7,6 +7,9 @@ import { assignJob, bookJob } from "@/lib/actions/office";
 import { sendTomorrowReminders } from "@/lib/actions/comms";
 import { busyWindowsForDay, overlapsBusy } from "@/lib/calendar/push";
 import { fmtTime } from "@/lib/format";
+import { analyzeChain, type ChainJob, type Hop } from "@/lib/geo/distance";
+import { driveTimeResolver } from "@/lib/geo/service";
+import { DayMap, type MapStop } from "@/components/office/day-map";
 import { enabledJobTypes, enabledPacks } from "@/lib/trade-packs";
 import {
   Avatar,
@@ -118,6 +121,42 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
   const conflictedJobIds = new Set(
     dayJobs.filter((j) => overlapsBusy(j.scheduledAt, j.scheduledEnd, busyWindows)).map((j) => j.id)
   );
+
+  // ── D3: geography — per-tech drive chains + day-map stops ─────────────────
+  const { source: driveSource, resolve: resolveDrive } = await driveTimeResolver(session.organizationId);
+  const hopsByTech = new Map<string, Hop[]>();
+  const mapStops: MapStop[] = [];
+  for (let ti = 0; ti < techs.length; ti++) {
+    const tech = techs[ti];
+    const jobsForTech = dayJobs.filter((j) => j.assignedToId === tech.id && j.scheduledAt);
+    const chain: ChainJob[] = jobsForTech.map((j) => ({
+      id: j.id,
+      scheduledAt: j.scheduledAt as Date,
+      scheduledEnd: j.scheduledEnd,
+      point: j.property.lat !== null && j.property.lng !== null ? { lat: j.property.lat, lng: j.property.lng } : null,
+    }));
+    // Precompute drive minutes for consecutive pairs (routed when connected).
+    const sorted = [...chain].sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime());
+    const driveByPair = new Map<string, number>();
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const a = sorted[i];
+      const b = sorted[i + 1];
+      if (a.point && b.point) {
+        driveByPair.set(`${a.point.lat},${a.point.lng}|${b.point.lat},${b.point.lng}`, await resolveDrive(a.point, b.point));
+      }
+    }
+    hopsByTech.set(
+      tech.id,
+      analyzeChain(chain, (from, to) => driveByPair.get(`${from.lat},${from.lng}|${to.lat},${to.lng}`) ?? null)
+    );
+    sorted.forEach((c, i) => {
+      if (c.point) {
+        const job = jobsForTech.find((j) => j.id === c.id);
+        mapStops.push({ ...c.point, key: c.id, label: job?.number ?? "", order: i + 1, techIndex: ti });
+      }
+    });
+  }
+  const impossibleCount = Array.from(hopsByTech.values()).flat().filter((h) => h.status === "impossible").length;
 
   const statusCounts = dayJobs.reduce<Record<string, number>>((acc, j) => {
     acc[j.status] = (acc[j.status] ?? 0) + 1;
@@ -287,21 +326,75 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
                 {jobsForTech.length === 0 ? (
                   <EmptyState title="No jobs this day" hint="Assign from the unassigned lane." />
                 ) : (
-                  jobsForTech.map((job) => (
-                    <div key={job.id}>
-                      {conflictedJobIds.has(job.id) ? (
-                        <div className="mb-0.5 rounded-t-md bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                          ⚠️ Overlaps a calendar busy window
-                        </div>
-                      ) : null}
-                      <DispatchJobCard job={job} />
-                    </div>
-                  ))
+                  jobsForTech.map((job) => {
+                    // D3: drive-time chip for the hop LEAVING this job.
+                    const hop = (hopsByTech.get(tech.id) ?? []).find((h) => h.fromJobId === job.id);
+                    return (
+                      <div key={job.id}>
+                        {conflictedJobIds.has(job.id) ? (
+                          <div className="mb-0.5 rounded-t-md bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                            ⚠️ Overlaps a calendar busy window
+                          </div>
+                        ) : null}
+                        <DispatchJobCard job={job} />
+                        {hop && hop.driveMinutes !== null ? (
+                          <div
+                            className={`mt-1 rounded-md px-2 py-1 text-center text-[11px] font-medium ${
+                              hop.status === "impossible"
+                                ? "bg-red-100 text-red-800"
+                                : hop.status === "tight"
+                                  ? "bg-amber-100 text-amber-800"
+                                  : "bg-slate-100 text-slate-600"
+                            }`}
+                            title={driveSource === "routed" ? "Routed drive time (Google Maps)" : "Estimated from straight-line distance"}
+                          >
+                            {hop.status === "impossible"
+                              ? `⛔ Can't make it — ~${hop.driveMinutes} min drive, ${hop.gapMinutes} min gap`
+                              : hop.status === "tight"
+                                ? `⚠️ 🚗 ~${hop.driveMinutes} min drive · only ${hop.gapMinutes - hop.driveMinutes} min slack`
+                                : `🚗 ~${hop.driveMinutes} min drive · ${hop.gapMinutes} min gap`}
+                            {driveSource === "estimate" ? " · est." : ""}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
           );
         })}
+      </div>
+
+      {/* D3: day map — self-contained SVG, one color per tech, stops in visit order */}
+      <div className="mb-6 grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader
+            title="🗺️ Day map"
+            subtitle={`Stops in visit order, one color per tech${impossibleCount > 0 ? ` · ⛔ ${impossibleCount} impossible back-to-back${impossibleCount > 1 ? "s" : ""}` : ""}`}
+          />
+          <CardBody>
+            <DayMap stops={mapStops} techs={techs.map((t2) => t2.name)} />
+          </CardBody>
+        </Card>
+        <Card>
+          <CardHeader
+            title="Drive times"
+            subtitle={driveSource === "routed" ? "Routed via Google Maps" : "Estimated from straight-line distance — connect Google Maps in Settings for routed times"}
+          />
+          <CardBody className="text-sm text-slate-600">
+            <p>
+              Chips between jobs show the drive to the next stop and the scheduled gap.
+              <span className="mx-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px]">🚗 ok</span>
+              <span className="mx-1 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800">⚠️ tight</span>
+              <span className="mx-1 rounded bg-red-100 px-1.5 py-0.5 text-[11px] text-red-800">⛔ impossible</span>
+            </p>
+            <p className="mt-2 text-xs text-slate-500">
+              An <b>impossible</b> hop means the next job starts before the tech can physically arrive — reschedule
+              one side or reassign. Warnings never block; you stay in charge.
+            </p>
+          </CardBody>
+        </Card>
       </div>
 
       {/* Book job */}
