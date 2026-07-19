@@ -320,6 +320,8 @@ export const projects = pgTable("projects", {
   budgetMaterialsCents: integer("budget_materials_cents").notNull().default(0),
   startDate: timestamp("start_date", { withTimezone: true }),
   endDate: timestamp("end_date", { withTimezone: true }),
+  /** Soft archive (M2) — CLOSED projects only; hidden from the list, reversible. */
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

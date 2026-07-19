@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { t, withTenant } from "@/db";
-import { eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { fmtDate, fmtDateTime, money, timeAgo } from "@/lib/format";
@@ -40,6 +40,27 @@ import {
   setMilestoneStatus,
   setPermitStatus,
 } from "@/lib/actions/sales";
+import {
+  addMilestone,
+  archiveProject,
+  blockMilestone,
+  createProjectInvoice,
+  deleteCostEntry,
+  deleteMilestone,
+  linkJobToProject,
+  moveMilestone,
+  rejectChangeOrder,
+  removeSubcontractor,
+  setProjectStatus,
+  unarchiveProject,
+  unlinkJobFromProject,
+  updateChangeOrder,
+  updateCostEntry,
+  updateMilestone,
+  updateProject,
+  updateSubcontractor,
+} from "@/lib/actions/projects";
+import { PROJECT_TRANSITIONS, type ProjectStatus } from "@/lib/manage/lifecycle";
 import { clsx } from "@/lib/clsx";
 
 export const dynamic = "force-dynamic";
@@ -75,7 +96,7 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
   const session = await requireSession();
   if (!can(session.role, "projects.manage")) return <Forbidden />;
 
-  const { project, activities } = await withTenant(session.organizationId, async (tx) => {
+  const { project, activities, linkableJobs } = await withTenant(session.organizationId, async (tx) => {
     const project = await tx.query.projects.findFirst({
       where: eq(t.projects.id, params.id),
       with: {
@@ -89,15 +110,25 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
         jobs: { with: { assignedTo: true } },
       },
     });
-    const activities = project
-      ? await tx.query.activities.findMany({
-          where: eq(t.activities.projectId, project.id),
-          with: { user: true },
-        })
-      : [];
-    return { project, activities };
+    const [activities, linkableJobs] = project
+      ? await Promise.all([
+          tx.query.activities.findMany({
+            where: eq(t.activities.projectId, project.id),
+            with: { user: true },
+          }),
+          // M2: same-customer jobs not linked to any project yet.
+          tx.query.jobs.findMany({
+            where: and(eq(t.jobs.customerId, project.customerId), isNull(t.jobs.projectId), isNull(t.jobs.deletedAt)),
+            orderBy: asc(t.jobs.number),
+          }),
+        ])
+      : [[], []];
+    return { project, activities, linkableJobs };
   });
   if (!project) notFound();
+
+  const transitions = PROJECT_TRANSITIONS[project.status as ProjectStatus] ?? [];
+  const toDateInput = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : "");
 
   activities.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
@@ -167,6 +198,93 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
           hint={`${marginPct}% of contract`}
         />
       </div>
+
+      {/* M2: archived banner */}
+      {project.archivedAt ? (
+        <Card className="mt-4 border-slate-300 bg-slate-50">
+          <CardBody className="flex flex-wrap items-center gap-3 text-sm text-slate-700">
+            <span>📦 This project is archived — hidden from the projects list.</span>
+            <form action={unarchiveProject}>
+              <input type="hidden" name="projectId" value={project.id} />
+              <Button type="submit" size="sm" variant="secondary">
+                ♻️ Restore project
+              </Button>
+            </form>
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {/* M2: Manage project — status transitions, header edit, archive */}
+      <Card className="mt-4">
+        <CardBody className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</span>
+            {transitions.map((to) => (
+              <form key={to} action={setProjectStatus}>
+                <input type="hidden" name="projectId" value={project.id} />
+                <input type="hidden" name="to" value={to} />
+                <Button
+                  size="sm"
+                  variant={to === "COMPLETED" ? "success" : to === "ON_HOLD" ? "secondary" : "secondary"}
+                  title={
+                    to === "ACTIVE" && project.status === "COMPLETED"
+                      ? "Reopen — the project wasn't actually done"
+                      : to === "COMPLETED" && project.status === "CLOSED"
+                        ? "Reopen a closed project for corrections"
+                        : undefined
+                  }
+                >
+                  {to === "ACTIVE" && (project.status === "ON_HOLD" || project.status === "COMPLETED")
+                    ? "♻️ Resume (Active)"
+                    : to === "COMPLETED" && project.status === "CLOSED"
+                      ? "♻️ Reopen (Completed)"
+                      : `→ ${statusLabel(to)}`}
+                </Button>
+              </form>
+            ))}
+            {project.status === "CLOSED" && !project.archivedAt ? (
+              <form action={archiveProject}>
+                <input type="hidden" name="projectId" value={project.id} />
+                <Button type="submit" size="sm" variant="ghost" title="Hides the project from the list — reversible">
+                  📦 Archive project
+                </Button>
+              </form>
+            ) : null}
+          </div>
+
+          <details className="rounded-lg border border-slate-200">
+            <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-700">✏️ Edit project details</summary>
+            <form action={updateProject} className="grid gap-3 border-t border-slate-100 p-3 md:grid-cols-3">
+              <input type="hidden" name="projectId" value={project.id} />
+              <div className="md:col-span-3">
+                <Field label="Project name">
+                  <Input name="name" required defaultValue={project.name} />
+                </Field>
+              </div>
+              <Field label="Contract value ($)">
+                <Input name="contractValue" inputMode="decimal" defaultValue={String(project.contractValueCents / 100)} />
+              </Field>
+              <Field label="Labor budget ($)">
+                <Input name="budgetLabor" inputMode="decimal" defaultValue={String(project.budgetLaborCents / 100)} />
+              </Field>
+              <Field label="Materials budget ($)">
+                <Input name="budgetMaterials" inputMode="decimal" defaultValue={String(project.budgetMaterialsCents / 100)} />
+              </Field>
+              <Field label="Start date">
+                <Input name="startDate" type="date" defaultValue={toDateInput(project.startDate)} />
+              </Field>
+              <Field label="End date">
+                <Input name="endDate" type="date" defaultValue={toDateInput(project.endDate)} />
+              </Field>
+              <div className="flex items-end">
+                <Button type="submit" size="sm">
+                  Save project
+                </Button>
+              </div>
+            </form>
+          </details>
+        </CardBody>
+      </Card>
 
       <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-3">
         {/* Main column */}
@@ -273,11 +391,90 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
                             </span>
                           ) : null}
                         </div>
+
+                        {/* M2: milestone management — reorder, edit, block, delete */}
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-8">
+                          <form action={moveMilestone}>
+                            <input type="hidden" name="milestoneId" value={m.id} />
+                            <input type="hidden" name="dir" value="-1" />
+                            <button type="submit" disabled={i === 0} title="Move earlier" className="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100 disabled:opacity-30">▲</button>
+                          </form>
+                          <form action={moveMilestone}>
+                            <input type="hidden" name="milestoneId" value={m.id} />
+                            <input type="hidden" name="dir" value="1" />
+                            <button type="submit" disabled={i === milestones.length - 1} title="Move later" className="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100 disabled:opacity-30">▼</button>
+                          </form>
+                          <details>
+                            <summary className="cursor-pointer rounded px-1.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-50">✏️ Edit</summary>
+                            <form action={updateMilestone} className="mt-2 grid gap-2 rounded-lg border border-slate-200 p-2.5 sm:grid-cols-2">
+                              <input type="hidden" name="milestoneId" value={m.id} />
+                              <Field label="Name">
+                                <Input name="name" required defaultValue={m.name} />
+                              </Field>
+                              <Field label="Due date">
+                                <Input name="dueDate" type="date" defaultValue={m.dueDate ? m.dueDate.toISOString().slice(0, 10) : ""} />
+                              </Field>
+                              <Field label={m.billed ? "Billing ($) — locked (already invoiced)" : "Billing ($)"}>
+                                <Input name="billingAmount" inputMode="decimal" defaultValue={String(m.billingAmountCents / 100)} disabled={m.billed} />
+                              </Field>
+                              <label className="flex items-end gap-2 pb-2 text-xs text-slate-700">
+                                <input type="checkbox" name="requiresInspection" defaultChecked={m.requiresInspection} className="h-4 w-4" />
+                                🔍 Requires inspection
+                              </label>
+                              <div className="sm:col-span-2">
+                                <Button type="submit" size="sm" variant="secondary">Save milestone</Button>
+                              </div>
+                            </form>
+                          </details>
+                          {m.status !== "COMPLETE" && m.status !== "BLOCKED" ? (
+                            <details>
+                              <summary className="cursor-pointer rounded px-1.5 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-50">⛔ Block…</summary>
+                              <form action={blockMilestone} className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-amber-200 p-2.5">
+                                <input type="hidden" name="milestoneId" value={m.id} />
+                                <div className="w-56">
+                                  <Field label="Reason (required)">
+                                    <Input name="reason" required placeholder="e.g. waiting on fixture delivery" />
+                                  </Field>
+                                </div>
+                                <Button type="submit" size="sm" variant="secondary">Block</Button>
+                              </form>
+                            </details>
+                          ) : null}
+                          {!m.billed ? (
+                            <form action={deleteMilestone}>
+                              <input type="hidden" name="milestoneId" value={m.id} />
+                              <button type="submit" title="Delete this milestone (billed milestones can't be deleted)" className="rounded px-1.5 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50">🗑 Delete</button>
+                            </form>
+                          ) : null}
+                        </div>
                       </li>
                     );
                   })}
                 </ul>
               )}
+              {/* M2: add a milestone */}
+              <form action={addMilestone} className="flex flex-wrap items-end gap-2 border-t border-slate-100 p-4">
+                <input type="hidden" name="projectId" value={project.id} />
+                <div className="min-w-[200px] flex-1">
+                  <Field label="New milestone — name">
+                    <Input name="name" required placeholder="e.g. Rough-in complete" />
+                  </Field>
+                </div>
+                <div className="w-36">
+                  <Field label="Due date">
+                    <Input name="dueDate" type="date" />
+                  </Field>
+                </div>
+                <div className="w-28">
+                  <Field label="Billing ($)">
+                    <Input name="billingAmount" inputMode="decimal" placeholder="0" />
+                  </Field>
+                </div>
+                <label className="flex items-center gap-1.5 pb-2 text-xs text-slate-700">
+                  <input type="checkbox" name="requiresInspection" className="h-4 w-4" /> 🔍 Inspection
+                </label>
+                <Button size="sm">＋ Add milestone</Button>
+              </form>
             </CardBody>
           </Card>
 
@@ -312,17 +509,51 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
                           </p>
                         ) : null}
                         {co.status === "PENDING_SIGNATURE" || co.status === "DRAFT" ? (
-                          <form action={approveChangeOrder} className="mt-2 flex flex-wrap items-end gap-2">
-                            <input type="hidden" name="changeOrderId" value={co.id} />
-                            <div className="w-56">
-                              <Field label="Customer/GC signature">
-                                <Input name="signedName" required placeholder="Type full name to sign" />
-                              </Field>
+                          <>
+                            <form action={approveChangeOrder} className="mt-2 flex flex-wrap items-end gap-2">
+                              <input type="hidden" name="changeOrderId" value={co.id} />
+                              <div className="w-56">
+                                <Field label="Customer/GC signature">
+                                  <Input name="signedName" required placeholder="Type full name to sign" />
+                                </Field>
+                              </div>
+                              <Button size="sm" variant="success">
+                                ✍️ Mark approved
+                              </Button>
+                            </form>
+                            {/* M2: edit or reject while a decision is pending */}
+                            <div className="mt-2 flex flex-wrap items-start gap-2">
+                              <details>
+                                <summary className="cursor-pointer rounded px-1.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-50">✏️ Edit CO</summary>
+                                <form action={updateChangeOrder} className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 p-2.5">
+                                  <input type="hidden" name="changeOrderId" value={co.id} />
+                                  <div className="min-w-[200px] flex-1">
+                                    <Field label="Description">
+                                      <Input name="description" required defaultValue={co.description} />
+                                    </Field>
+                                  </div>
+                                  <div className="w-28">
+                                    <Field label="Amount ($)">
+                                      <Input name="amount" required inputMode="decimal" defaultValue={String(co.amountCents / 100)} />
+                                    </Field>
+                                  </div>
+                                  <Button type="submit" size="sm" variant="secondary">Save CO</Button>
+                                </form>
+                              </details>
+                              <details>
+                                <summary className="cursor-pointer rounded px-1.5 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50">✗ Reject…</summary>
+                                <form action={rejectChangeOrder} className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-red-200 p-2.5">
+                                  <input type="hidden" name="changeOrderId" value={co.id} />
+                                  <div className="w-56">
+                                    <Field label="Reason">
+                                      <Input name="reason" placeholder="e.g. customer declined the price" />
+                                    </Field>
+                                  </div>
+                                  <Button type="submit" size="sm" variant="danger">Reject CO</Button>
+                                </form>
+                              </details>
                             </div>
-                            <Button size="sm" variant="success">
-                              ✍️ Mark approved
-                            </Button>
-                          </form>
+                          </>
                         ) : null}
                       </li>
                     ))}
@@ -474,11 +705,52 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
               ) : (
                 <ul className="divide-y divide-slate-100">
                   {costRows.map((c) => (
-                    <li key={c.id} className="flex items-center gap-3 px-4 py-2.5">
-                      <Badge tone={costKindTone[c.kind]}>{statusLabel(c.kind)}</Badge>
-                      <span className="min-w-0 flex-1 truncate text-sm text-slate-800">{c.description}</span>
-                      <span className="text-xs text-slate-500">{fmtDate(c.incurredAt)}</span>
-                      <span className="font-semibold tabular-nums text-slate-900">{money(c.amountCents)}</span>
+                    <li key={c.id} className="px-4 py-2.5">
+                      <div className="flex items-center gap-3">
+                        <Badge tone={costKindTone[c.kind]}>{statusLabel(c.kind)}</Badge>
+                        <span className="min-w-0 flex-1 truncate text-sm text-slate-800">{c.description}</span>
+                        <span className="text-xs text-slate-500">{fmtDate(c.incurredAt)}</span>
+                        <span className="font-semibold tabular-nums text-slate-900">{money(c.amountCents)}</span>
+                      </div>
+                      {/* M2: edit / delete a cost entry */}
+                      <div className="mt-1 flex flex-wrap items-start gap-2">
+                        <details>
+                          <summary className="cursor-pointer rounded px-1.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-50">✏️ Edit</summary>
+                          <form action={updateCostEntry} className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 p-2.5">
+                            <input type="hidden" name="costId" value={c.id} />
+                            <div className="w-36">
+                              <Field label="Kind">
+                                <Select name="kind" defaultValue={c.kind}>
+                                  <option value="LABOR">Labor</option>
+                                  <option value="MATERIAL">Material</option>
+                                  <option value="SUBCONTRACTOR">Subcontractor</option>
+                                  <option value="OTHER">Other</option>
+                                </Select>
+                              </Field>
+                            </div>
+                            <div className="min-w-[160px] flex-1">
+                              <Field label="Description">
+                                <Input name="description" required defaultValue={c.description} />
+                              </Field>
+                            </div>
+                            <div className="w-24">
+                              <Field label="Amount ($)">
+                                <Input name="amount" required inputMode="decimal" defaultValue={String(c.amountCents / 100)} />
+                              </Field>
+                            </div>
+                            <div className="w-36">
+                              <Field label="Incurred on">
+                                <Input name="incurredAt" type="date" defaultValue={c.incurredAt.toISOString().slice(0, 10)} />
+                              </Field>
+                            </div>
+                            <Button type="submit" size="sm" variant="secondary">Save cost</Button>
+                          </form>
+                        </details>
+                        <form action={deleteCostEntry}>
+                          <input type="hidden" name="costId" value={c.id} />
+                          <button type="submit" className="rounded px-1.5 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50" title="Remove this cost entry (audited)">🗑 Delete</button>
+                        </form>
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -549,6 +821,37 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
                             ⛔ No COI on file
                           </div>
                         )}
+                        {/* M2: edit (incl. COI renewal) / remove a sub */}
+                        <div className="mt-1.5 flex flex-wrap items-start gap-2">
+                          <details>
+                            <summary className="cursor-pointer rounded px-1.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-50">✏️ Edit / renew COI</summary>
+                            <form action={updateSubcontractor} className="mt-2 space-y-2 rounded-lg border border-slate-200 p-2.5">
+                              <input type="hidden" name="subId" value={s.id} />
+                              <div className="grid grid-cols-2 gap-2">
+                                <Field label="Name">
+                                  <Input name="name" required defaultValue={s.name} />
+                                </Field>
+                                <Field label="Trade">
+                                  <Input name="trade" required defaultValue={s.trade} />
+                                </Field>
+                                <Field label="Phone">
+                                  <Input name="phone" defaultValue={s.phone ?? ""} />
+                                </Field>
+                                <Field label="License #">
+                                  <Input name="licenseNumber" defaultValue={s.licenseNumber ?? ""} />
+                                </Field>
+                              </div>
+                              <Field label="COI expires (set a new date to renew)">
+                                <Input name="coiExpiresAt" type="date" defaultValue={s.coiExpiresAt ? s.coiExpiresAt.toISOString().slice(0, 10) : ""} />
+                              </Field>
+                              <Button type="submit" size="sm" variant="secondary">Save sub</Button>
+                            </form>
+                          </details>
+                          <form action={removeSubcontractor}>
+                            <input type="hidden" name="subId" value={s.id} />
+                            <button type="submit" className="rounded px-1.5 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50">🗑 Remove</button>
+                          </form>
+                        </div>
                       </li>
                     );
                   })}
@@ -578,9 +881,9 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
             </CardBody>
           </Card>
 
-          {/* Linked jobs */}
+          {/* Linked jobs (M2: link/unlink) */}
           <Card>
-            <CardHeader title="🔧 Linked jobs" />
+            <CardHeader title="🔧 Linked jobs" subtitle="Same-customer jobs can be attached here" />
             <CardBody className="p-0">
               {project.jobs.length === 0 ? (
                 <div className="p-4">
@@ -590,13 +893,59 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
                 <ul className="divide-y divide-slate-100">
                   {project.jobs.map((j) => (
                     <li key={j.id} className="flex items-center gap-2 px-4 py-2.5">
-                      <span className="text-sm font-medium text-slate-900">{j.number}</span>
+                      <Link href={`/jobs/${j.id}`} className="text-sm font-medium text-blue-700 hover:underline">
+                        {j.number}
+                      </Link>
                       <span className="min-w-0 flex-1 truncate text-xs text-slate-500">{j.jobType}</span>
                       <Badge tone={jobStatusTone[j.status]}>{statusLabel(j.status)}</Badge>
+                      <form action={unlinkJobFromProject}>
+                        <input type="hidden" name="projectId" value={project.id} />
+                        <input type="hidden" name="jobId" value={j.id} />
+                        <button type="submit" title="Unlink from this project" className="rounded px-1.5 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50">✂ Unlink</button>
+                      </form>
                     </li>
                   ))}
                 </ul>
               )}
+              {linkableJobs.length > 0 ? (
+                <form action={linkJobToProject} className="flex flex-wrap items-end gap-2 border-t border-slate-100 p-4">
+                  <input type="hidden" name="projectId" value={project.id} />
+                  <div className="min-w-[180px] flex-1">
+                    <Field label="Link an existing job">
+                      <Select name="jobId" required defaultValue="">
+                        <option value="" disabled>
+                          Choose job…
+                        </option>
+                        {linkableJobs.map((j) => (
+                          <option key={j.id} value={j.id}>
+                            {j.number} · {j.jobType}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  </div>
+                  <Button size="sm" variant="secondary">🔗 Link</Button>
+                </form>
+              ) : null}
+            </CardBody>
+          </Card>
+
+          {/* M2: ad-hoc project invoice */}
+          <Card>
+            <CardHeader title="🧾 Ad-hoc invoice" subtitle="Drafts an invoice against this project — send it from Invoices & AR" />
+            <CardBody>
+              <form action={createProjectInvoice} className="space-y-2">
+                <input type="hidden" name="projectId" value={project.id} />
+                <Field label="Description">
+                  <Input name="description" required placeholder="e.g. Deposit — mobilization" />
+                </Field>
+                <Field label="Amount ($)">
+                  <Input name="amount" required inputMode="decimal" placeholder="5000" />
+                </Field>
+                <Button type="submit" size="sm" variant="secondary">
+                  ＋ Draft invoice
+                </Button>
+              </form>
             </CardBody>
           </Card>
 

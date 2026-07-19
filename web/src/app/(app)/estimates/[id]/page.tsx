@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { t, withTenant } from "@/db";
 import { eq, inArray } from "drizzle-orm";
 import { approvePunchoutCart, rejectPunchoutCart, startPunchout } from "@/lib/actions/punchout";
+import { promoteEstimateToProject } from "@/lib/actions/projects";
 import { readCartLines } from "@/lib/punchout/cxml";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -149,6 +150,15 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
             <span className="ml-auto text-sm text-emerald-800">
               Job created: <span className="font-semibold">{est.job.number}</span> ({statusLabel(est.job.status)})
             </span>
+          ) : null}
+          {/* M2: promote sold work into a full project */}
+          {can(session.role, "projects.manage") && !est.job?.projectId ? (
+            <form action={promoteEstimateToProject}>
+              <input type="hidden" name="estimateId" value={est.id} />
+              <Button type="submit" size="sm" variant="secondary" title="Creates a project from this sold estimate (contract value = selected option) and links the sold job">
+                🏗️ Promote to project
+              </Button>
+            </form>
           ) : null}
         </div>
       ) : null}

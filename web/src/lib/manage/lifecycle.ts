@@ -77,6 +77,47 @@ export function propertyArchiveBlocker(input: { openJobs: number }): string | nu
   return null;
 }
 
+// ── Projects (M2) ────────────────────────────────────────────────────────────
+
+export type ProjectStatus = "PLANNING" | "ACTIVE" | "ON_HOLD" | "COMPLETED" | "CLOSED";
+
+/**
+ * Explicit transition map: PLANNING→ACTIVE→(ON_HOLD⇄ACTIVE)→COMPLETED→CLOSED,
+ * plus the deliberate back-transitions COMPLETED→ACTIVE ("not actually done")
+ * and CLOSED→COMPLETED (reopen for corrections).
+ */
+export const PROJECT_TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
+  PLANNING: ["ACTIVE"],
+  ACTIVE: ["ON_HOLD", "COMPLETED"],
+  ON_HOLD: ["ACTIVE"],
+  COMPLETED: ["CLOSED", "ACTIVE"],
+  CLOSED: ["COMPLETED"],
+};
+
+export function projectTransitionBlocker(from: ProjectStatus, to: ProjectStatus): string | null {
+  if (PROJECT_TRANSITIONS[from]?.includes(to)) return null;
+  return `Can't move a project from ${from} to ${to}.`;
+}
+
+/** Archive is the lifecycle exit for CLOSED projects only. */
+export function projectArchiveBlocker(status: ProjectStatus): string | null {
+  return status === "CLOSED" ? null : "Only CLOSED projects can be archived — close it out first.";
+}
+
+/** Billed milestones are financial records — they can't be deleted. */
+export function milestoneDeleteBlocker(billed: boolean): string | null {
+  return billed ? "This milestone has been invoiced — billed milestones can't be deleted." : null;
+}
+
+export type ChangeOrderStatus = "DRAFT" | "PENDING_SIGNATURE" | "APPROVED" | "REJECTED";
+
+/** COs are editable until a decision lands (approved = money, rejected = record). */
+export function changeOrderEditBlocker(status: ChangeOrderStatus): string | null {
+  if (status === "APPROVED") return "Approved change orders are part of the contract — create a new CO instead.";
+  if (status === "REJECTED") return "Rejected change orders are kept as-is for the record.";
+  return null;
+}
+
 // ── Leads ────────────────────────────────────────────────────────────────────
 
 export type LeadStage = "NEW" | "CONTACTED" | "ESTIMATE_SCHEDULED" | "ESTIMATE_SENT" | "FOLLOW_UP" | "WON" | "LOST";

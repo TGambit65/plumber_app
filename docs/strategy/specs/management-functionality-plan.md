@@ -1,6 +1,6 @@
 # Management Functionality Plan — full CRUD/lifecycle across every side-menu screen
 
-**Status: IN PROGRESS** — M1 ✅ DONE · M2–M6 pending.
+**Status: IN PROGRESS** — M1 ✅ · M2 ✅ DONE · M3–M6 pending.
 
 ## 1. The problem
 
@@ -109,7 +109,21 @@ reschedule PATCHes the same calendar event and cancel deletes it.
 - Pipeline board: stage **jump** dropdown per card (not just ◀/▶); moving to
   LOST via the board requires the same lostReason as the detail page.
 
-### Phase M2 — Projects: full lifecycle (the "can't add a project" fix)
+### Phase M2 — Projects: full lifecycle ✅ DONE
+
+Shipped as specified below via `src/lib/actions/projects.ts` (18 actions) +
+lifecycle rules in `manage/lifecycle.ts` (PROJECT_TRANSITIONS map with
+deliberate reopens COMPLETED→ACTIVE and CLOSED→COMPLETED; archive gated on
+CLOSED; billed-milestone delete lock; CO edit lock once decided). Projects
+page gains the "＋ New project" form + archived toggle; the detail page gains
+status buttons (only legal transitions offered), header editing, milestone
+add/edit/reorder/block/delete, CO edit+reject, cost edit/delete, sub
+edit/COI-renew/remove, job link/unlink (same-customer guard), and ad-hoc
+DRAFT invoices; approved estimates get "🏗️ Promote to project" (contract =
+selected option, sold job comes along). `projects.archived_at` added.
+Verified: 7 new unit tests (133 total) + 36-check Playwright e2e
+(`verify-m2.mjs`) with DB + audit assertions, incl. billed-lock, REJECTED
+enum reachability, and archive round-trip.
 
 - `createProject`: name, customer, property, contract value, budgets
   (labor/materials), start/end dates — from the Projects list page, plus a

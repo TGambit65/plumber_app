@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  changeOrderEditBlocker,
   customerArchiveBlocker,
   jobArchiveBlocker,
   jobCancelBlocker,
   jobRescheduleBlocker,
   jobRevertTarget,
   leadReopenBlocker,
+  milestoneDeleteBlocker,
+  projectArchiveBlocker,
+  projectTransitionBlocker,
+  PROJECT_TRANSITIONS,
   propertyArchiveBlocker,
   statusAfterReschedule,
   type JobStatus,
+  type ProjectStatus,
 } from "../lifecycle";
 
 /** Unit tests for the M1 lifecycle rules (management plan §2). */
@@ -91,6 +97,60 @@ describe("propertyArchiveBlocker", () => {
   it("blocks only while open jobs reference the property", () => {
     expect(propertyArchiveBlocker({ openJobs: 0 })).toBeNull();
     expect(propertyArchiveBlocker({ openJobs: 2 })).toMatch(/2 open jobs/);
+  });
+});
+
+describe("projectTransitionBlocker (M2)", () => {
+  it("allows the forward flow", () => {
+    expect(projectTransitionBlocker("PLANNING", "ACTIVE")).toBeNull();
+    expect(projectTransitionBlocker("ACTIVE", "ON_HOLD")).toBeNull();
+    expect(projectTransitionBlocker("ON_HOLD", "ACTIVE")).toBeNull();
+    expect(projectTransitionBlocker("ACTIVE", "COMPLETED")).toBeNull();
+    expect(projectTransitionBlocker("COMPLETED", "CLOSED")).toBeNull();
+  });
+
+  it("allows deliberate reopens only", () => {
+    expect(projectTransitionBlocker("COMPLETED", "ACTIVE")).toBeNull(); // not actually done
+    expect(projectTransitionBlocker("CLOSED", "COMPLETED")).toBeNull(); // reopen for corrections
+    expect(projectTransitionBlocker("CLOSED", "ACTIVE")).toMatch(/Can't move/);
+    expect(projectTransitionBlocker("CLOSED", "PLANNING")).toMatch(/Can't move/);
+  });
+
+  it("forbids skipping states", () => {
+    expect(projectTransitionBlocker("PLANNING", "COMPLETED")).toMatch(/Can't move/);
+    expect(projectTransitionBlocker("PLANNING", "CLOSED")).toMatch(/Can't move/);
+    expect(projectTransitionBlocker("ON_HOLD", "COMPLETED")).toMatch(/Can't move/);
+  });
+
+  it("every status has an exit (no dead ends)", () => {
+    for (const s of Object.keys(PROJECT_TRANSITIONS) as ProjectStatus[]) {
+      expect(PROJECT_TRANSITIONS[s].length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("projectArchiveBlocker (M2)", () => {
+  it("only CLOSED projects archive", () => {
+    expect(projectArchiveBlocker("CLOSED")).toBeNull();
+    for (const s of ["PLANNING", "ACTIVE", "ON_HOLD", "COMPLETED"] as ProjectStatus[]) {
+      expect(projectArchiveBlocker(s)).toMatch(/CLOSED/);
+    }
+  });
+});
+
+describe("milestoneDeleteBlocker (M2)", () => {
+  it("billed milestones are financial records", () => {
+    expect(milestoneDeleteBlocker(false)).toBeNull();
+    expect(milestoneDeleteBlocker(true)).toMatch(/invoiced/);
+  });
+});
+
+describe("changeOrderEditBlocker (M2)", () => {
+  it("editable until a decision lands", () => {
+    expect(changeOrderEditBlocker("DRAFT")).toBeNull();
+    expect(changeOrderEditBlocker("PENDING_SIGNATURE")).toBeNull();
+    expect(changeOrderEditBlocker("APPROVED")).toMatch(/contract/);
+    expect(changeOrderEditBlocker("REJECTED")).toMatch(/record/);
   });
 });
 

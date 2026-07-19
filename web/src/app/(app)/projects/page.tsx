@@ -1,14 +1,20 @@
 import Link from "next/link";
 import { t, withTenant } from "@/db";
-import { desc } from "drizzle-orm";
+import { asc, desc, isNotNull, isNull } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { fmtDate, money } from "@/lib/format";
+import { createProject } from "@/lib/actions/projects";
 import {
   Badge,
+  Button,
   Card,
+  CardBody,
   EmptyState,
+  Field,
+  Input,
   PageHeader,
+  Select,
   Table,
   TCell,
   THead,
@@ -28,15 +34,25 @@ const projectStatusTone: Record<string, BadgeTone> = {
   CLOSED: "slate",
 };
 
-export default async function ProjectsPage() {
+export default async function ProjectsPage({ searchParams }: { searchParams: { archived?: string } }) {
   const session = await requireSession();
   if (!can(session.role, "projects.manage")) return <Forbidden />;
+  const showArchived = searchParams.archived === "1";
 
-  const projects = await withTenant(session.organizationId, (tx) =>
-    tx.query.projects.findMany({
-      with: { customer: true, milestones: true, costs: true, changeOrders: true },
-      orderBy: [desc(t.projects.createdAt)],
-    })
+  const [projects, customers] = await withTenant(session.organizationId, (tx) =>
+    Promise.all([
+      tx.query.projects.findMany({
+        // M2: archived projects hidden by default; ?archived=1 shows ONLY them.
+        where: showArchived ? isNotNull(t.projects.archivedAt) : isNull(t.projects.archivedAt),
+        with: { customer: true, milestones: true, costs: true, changeOrders: true },
+        orderBy: [desc(t.projects.createdAt)],
+      }),
+      tx.query.customers.findMany({
+        where: isNull(t.customers.archivedAt),
+        with: { properties: { where: isNull(t.properties.archivedAt) } },
+        orderBy: asc(t.customers.name),
+      }),
+    ])
   );
 
   return (
@@ -44,7 +60,73 @@ export default async function ProjectsPage() {
       <PageHeader
         title="🏗️ Projects"
         subtitle="Milestones, budgets, permits & change orders for larger jobs"
+        action={
+          <Link
+            href={showArchived ? "/projects" : "/projects?archived=1"}
+            className="rounded-full border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            {showArchived ? "← Back to active projects" : "📦 Show archived"}
+          </Link>
+        }
       />
+
+      {/* M2: create a project (finally!) */}
+      <Card className="mb-4">
+        <CardBody>
+          <details>
+            <summary className="cursor-pointer text-sm font-medium text-blue-600">＋ New project</summary>
+            <form action={createProject} className="mt-3 grid gap-3 md:grid-cols-3">
+              <Field label="Project name">
+                <Input name="name" required placeholder="e.g. Whole-house repipe — Marsh residence" />
+              </Field>
+              <Field label="Customer">
+                <Select name="customerId" required defaultValue="">
+                  <option value="" disabled>
+                    Select customer…
+                  </option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Property (must belong to the customer)">
+                <Select name="propertyId" required defaultValue="">
+                  <option value="" disabled>
+                    Select property…
+                  </option>
+                  {customers.flatMap((c) =>
+                    c.properties.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {c.name} — {p.address}, {p.city}
+                      </option>
+                    ))
+                  )}
+                </Select>
+              </Field>
+              <Field label="Contract value ($)">
+                <Input name="contractValue" inputMode="decimal" placeholder="48000" />
+              </Field>
+              <Field label="Labor budget ($)">
+                <Input name="budgetLabor" inputMode="decimal" placeholder="18000" />
+              </Field>
+              <Field label="Materials budget ($)">
+                <Input name="budgetMaterials" inputMode="decimal" placeholder="14000" />
+              </Field>
+              <Field label="Start date">
+                <Input name="startDate" type="date" />
+              </Field>
+              <Field label="End date">
+                <Input name="endDate" type="date" />
+              </Field>
+              <div className="flex items-end">
+                <Button type="submit">Create project</Button>
+              </div>
+            </form>
+          </details>
+        </CardBody>
+      </Card>
 
       <Card>
         {projects.length === 0 ? (
