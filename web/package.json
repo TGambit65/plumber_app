@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "db:push": "drizzle-kit push && npm run db:verify-rls",
+    "db:push": "drizzle-kit push && npm run db:rls && npm run db:verify-rls",
     "db:generate": "drizzle-kit generate",
     "db:seed": "tsx --env-file=.env src/db/seed.ts",
     "test": "vitest run",

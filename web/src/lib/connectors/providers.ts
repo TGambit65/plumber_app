@@ -24,6 +24,8 @@ import { twilioConnector } from "./twilio";
 import { googleCalendarConnector } from "./google-calendar";
 import { outlookCalendarConnector } from "./outlook-calendar";
 import { googleMapsConnector } from "./google-maps";
+import { jobberConnector } from "./jobber";
+import { serviceTitanConnector } from "./servicetitan";
 
 /**
  * Connector registry. Odoo (JSON-RPC), HubSpot (CRM v3 REST) and QuickBooks
@@ -121,7 +123,9 @@ type StubSpec = {
 };
 
 function makeStub(spec: StubSpec): Connector {
-  const { descriptor } = spec;
+  // Tag the descriptor so the hub badge ("Demo stub") derives from data,
+  // not a hardcoded provider list in the UI.
+  const descriptor: ConnectorDescriptor = { ...spec.descriptor, demo: true };
   const conn: Connector = {
     descriptor,
     health: (config) => stubHealth(descriptor, config),
@@ -207,37 +211,9 @@ export const REGISTRY: Record<string, Connector> = {
     },
   }),
 
-  // Job apps
-  JOBBER: makeStub({
-    descriptor: {
-      provider: "JOBBER",
-      label: "Jobber",
-      emoji: "🧰",
-      capabilities: ["jobs"],
-      blurb: "Field service — pull jobs & visits from your existing Jobber account",
-      configFields: [apiKeyField("Jobber API token")],
-    },
-    jobRecords: [
-      { externalId: "job-5501", title: "Annual boiler service — Hartley residence", status: "scheduled", customerName: "J. Hartley", scheduledAt: "2026-07-21T13:00:00Z", address: "18 Birchwood Ln" },
-    ],
-  }),
-
-  SERVICETITAN: makeStub({
-    descriptor: {
-      provider: "SERVICETITAN",
-      label: "ServiceTitan",
-      emoji: "🛠️",
-      capabilities: ["jobs"],
-      blurb: "Field service — read jobs/dispatch from ServiceTitan",
-      configFields: [
-        { key: "tenantId", label: "Tenant ID", kind: "text", placeholder: "123456789", required: true },
-        apiKeyField("App key + access token"),
-      ],
-    },
-    jobRecords: [
-      { externalId: "st-88213", title: "No-heat call — rooftop unit 4", status: "dispatched", customerName: "Grandview Plaza", scheduledAt: "2026-07-18T15:30:00Z", address: "400 Grandview Ave" },
-    ],
-  }),
+  // Job apps (D5) — real Jobber GraphQL + ServiceTitan v2 implementations.
+  JOBBER: jobberConnector,
+  SERVICETITAN: serviceTitanConnector,
 
   HOUSECALL_PRO: makeStub({
     descriptor: {

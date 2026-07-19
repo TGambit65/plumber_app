@@ -10,6 +10,7 @@ import { getConnector } from "@/lib/connectors/providers";
 import type { Connector, ConnectorConfig, ExternalLead } from "@/lib/connectors/types";
 import { decryptConfig, encryptConfig } from "@/lib/connectors/secret-config";
 import { getKnowledgeStore } from "@/lib/knowledge/store";
+import { upsertExternalJobs } from "@/lib/fsm/import";
 
 /**
  * Server actions for the typed connector interface (constraint 9).
@@ -194,6 +195,83 @@ export async function testConnector(formData: FormData) {
 }
 
 // ── CRM sync ─────────────────────────────────────────────────────────────────
+
+// ── FSM import (dispatch D5) ─────────────────────────────────────────────────
+
+/**
+ * Pull jobs from a field-service provider (Jobber / ServiceTitan) and run
+ * them through the shared upsert pipeline: dedupe by external_ref, provider-
+ * prefixed numbers, find-or-create customers/properties, jobs arrive
+ * UNASSIGNED (crew assignment stays a local dispatcher decision). Mirrors
+ * syncCrmNow's loud-failure contract.
+ */
+export async function syncFsmNow(formData: FormData) {
+  const session = await ensureIntegrationsAdmin();
+  const provider = str(formData, "provider");
+  const connector: Connector | undefined = getConnector(provider);
+  if (!connector?.jobs) return;
+  const label = connector.descriptor.label;
+
+  const row = await loadConnection(session.organizationId, provider);
+  if (!row || row.status !== "CONNECTED") {
+    await notify(
+      session.userId,
+      `⚠️ ${label} import skipped`,
+      "Connector is not connected — configure and connect it first.",
+      "/settings?tab=integrations"
+    );
+    return;
+  }
+
+  const config = rowConfig(row);
+  const ops = connector.jobs(config);
+  const pull = await ops.pullJobs(row.lastSyncAt ?? undefined);
+
+  if (!pull.ok) {
+    // LOUD failure: status → ERROR, message stored + notified.
+    const message = pull.message ?? "Job pull failed";
+    await withTenant(session.organizationId, (tx) =>
+      tx
+        .update(t.integrationConnections)
+        .set({ status: "ERROR", config: encryptForStore(provider, { ...config, lastError: message }) })
+        .where(eq(t.integrationConnections.id, row.id))
+    );
+    await audit(session.userId, "SYNC_FAILED", "Integration", provider, { message });
+    await notify(session.userId, `⚠️ ${label} job import FAILED`, message, "/settings?tab=integrations");
+    revalidatePath("/settings");
+    return;
+  }
+
+  const summary = await upsertExternalJobs(session.organizationId, provider, pull.records);
+
+  await withTenant(session.organizationId, async (tx) => {
+    const clearedConfig = { ...config };
+    delete clearedConfig.lastError;
+    await tx
+      .update(t.integrationConnections)
+      .set({ status: "CONNECTED", lastSyncAt: new Date(), config: encryptForStore(provider, clearedConfig) })
+      .where(eq(t.integrationConnections.id, row.id));
+  });
+
+  await notify(
+    session.userId,
+    `✅ ${label} job import complete`,
+    `${pull.records.length} job(s) pulled · ${summary.created} new · ${summary.updated} updated · ${summary.customersCreated} customer(s) created` +
+      (pull.demo ? " · demo data" : ""),
+    summary.created + summary.updated > 0 ? "/jobs" : "/settings?tab=integrations"
+  );
+  await audit(session.userId, "SYNC", "Integration", provider, {
+    pulled: pull.records.length,
+    created: summary.created,
+    updated: summary.updated,
+    customersCreated: summary.customersCreated,
+    demo: pull.demo ?? false,
+  });
+
+  revalidatePath("/settings");
+  revalidatePath("/jobs");
+  revalidatePath("/dispatch");
+}
 
 /** JSON summary of an external lead for the OrgMemory staged candidate. */
 function leadSummary(lead: ExternalLead, syncedAt: string) {

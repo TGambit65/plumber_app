@@ -217,9 +217,45 @@ Playwright e2e (suggestion + runner-up render, dismiss/accept audits, full
 accept pipeline incl. SMS attempt, optimize diff → apply → impossible hop
 cleared → tech notified, aging-job nudge).
 
-### Phase D5 — FSM coexistence (when a prospect needs it)
-Live Jobber sync (import clients/jobs, webhook near-live updates) first;
-ServiceTitan migration tooling when a real ST shop is at the table.
+### Phase D5 — FSM coexistence ✅ DONE
+Live Jobber + ServiceTitan import — the app coexists with the FSM a shop
+already runs (augment, never clobber) so a pilot needs zero rip-and-replace.
+- **Shared import pipeline** (`src/lib/fsm/import.ts` + pure `fsm/map.ts`) —
+  provider status strings regex-mapped to the local job enum, single-line
+  addresses split into structured parts (missing parts stay an honest "—"),
+  provider-prefixed job numbers (JB-5501 / ST-88213) that never collide with
+  the local J-… sequence, and provenance keys (`external_ref =
+  "PROVIDER:id"` on jobs/customers/properties columns) so **re-imports
+  dedupe** — the same external job updates in place instead of duplicating.
+  Imported jobs arrive **UNASSIGNED**: crew assignment stays a local
+  dispatcher decision (the D4 suggestion engine happily helps).
+- **Live Jobber connector** (`connectors/jobber.ts`) — real GraphQL client
+  (single POST /api/graphql, Bearer + X-JOBBER-GRAPHQL-VERSION): health =
+  `{ account { name } }`, pullJobs maps job + client + property nodes into
+  the shared ExternalJob shape; fetch-by-id powers the webhook.
+- **Jobber webhook** (`/api/webhooks/jobber/[org]`) — verifies
+  X-Jobber-Hmac-SHA256 (base64 HMAC-SHA256 of the raw body, keyed by the
+  org's encrypted-at-rest client secret; constant-time compare; **fails
+  closed** with no secret). JOB_CREATE/UPDATE/COMPLETE → GraphQL refetch →
+  same upsert pipeline, so a reschedule inside Jobber lands on the local
+  dispatch board with nobody clicking anything.
+- **Live ServiceTitan connector** (`connectors/servicetitan.ts`) — OAuth2
+  client-credentials (cached tokens) + ST-App-Key header on every call;
+  tenant-scoped `/jpm/v2/.../jobs` joined with batch `/crm/v2/...` customers
+  + locations reads.
+- **Hub integration** — `syncFsmNow` server action (mirrors syncCrmNow's
+  loud-failure contract: pull error → status ERROR + stored lastError +
+  notification), "Import jobs" button on connected jobs-capability cards, and
+  the "Live API" / "Demo stub" badge is now descriptor-driven (makeStub tags
+  `demo: true`) instead of a hardcoded provider check.
+Verified: 113 unit tests total (24 new: status/address/number mapping edge
+cases + both live clients against in-process vendor-shaped mock APIs incl.
+401/429 and OAuth handshake paths) + 24-check Playwright e2e
+(`verify-d5.mjs` vs `mock-jobber.mjs`/`mock-servicetitan.mjs`: badge
+correctness, UI configure → encrypted secrets at rest, import provenance +
+status mapping + address splitting, re-import dedupe, webhook valid/forged/
+missing HMAC + unknown org, ST OAuth import, JB-/ST- jobs rendering next to
+local jobs).
 
 ---
 

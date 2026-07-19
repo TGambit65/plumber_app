@@ -99,6 +99,8 @@ export const customers = pgTable("customers", {
   notes: text("notes"),
   /** SMS opt-out (STOP via the inbound webhook, or set manually). Honored by every transactional send. */
   smsOptOut: boolean("sms_opt_out").notNull().default(false),
+  /** FSM import provenance (D5), e.g. "JOBBER:12345". */
+  externalRef: text("external_ref"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -120,6 +122,8 @@ export const properties = pgTable("properties", {
   lat: doublePrecision("lat"),
   lng: doublePrecision("lng"),
   geocodedAt: timestamp("geocoded_at", { withTimezone: true }),
+  /** FSM import provenance (D5). */
+  externalRef: text("external_ref"),
 });
 
 export const equipment = pgTable("equipment", {
@@ -246,6 +250,8 @@ export const jobs = pgTable("jobs", {
   scheduledEnd: timestamp("scheduled_end", { withTimezone: true }),
   /** External calendar event id (D2) — the pushed Google/Outlook event for this job. */
   calendarEventId: text("calendar_event_id"),
+  /** FSM import provenance (D5), e.g. "JOBBER:5501" — dedupe key for re-imports. */
+  externalRef: text("external_ref"),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),

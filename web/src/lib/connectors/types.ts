@@ -45,6 +45,12 @@ export interface ConnectorDescriptor {
   capabilities: ConnectorCapability[];
   blurb: string;
   configFields: ConnectorConfigField[];
+  /**
+   * True for demo stubs that return sample data (set by makeStub). Absent on
+   * real implementations — the hub badge ("Live API" vs "Demo stub") derives
+   * from this instead of a hardcoded provider list.
+   */
+  demo?: boolean;
 }
 
 /** Stored per-org in integration_connections.config (jsonb). */
@@ -90,7 +96,15 @@ export interface ExternalJob {
   status?: string;
   customerName?: string;
   scheduledAt?: string; // ISO timestamp
+  scheduledEnd?: string; // ISO timestamp
   address?: string;
+  // Structured location/contact detail (D5 import) — optional; stubs may omit.
+  city?: string;
+  state?: string;
+  zip?: string;
+  customerPhone?: string;
+  customerEmail?: string;
+  description?: string;
   demo?: boolean;
 }
 

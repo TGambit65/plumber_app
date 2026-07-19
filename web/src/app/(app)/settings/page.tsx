@@ -30,6 +30,7 @@ import {
   configureConnector,
   disconnectConnector,
   syncCrmNow,
+  syncFsmNow,
   testConnector,
 } from "@/lib/actions/connectors";
 import { configureSso, disableSso } from "@/lib/actions/sso";
@@ -357,7 +358,9 @@ function ConnectorCard({ connector, conn }: { connector: Connector; conn?: Conne
   const status = conn?.status ?? "DISCONNECTED";
   const cfg = (conn?.config ?? {}) as Record<string, string | undefined>;
   const isCrm = d.capabilities.includes("crm");
-  const isReal = d.provider === "ODOO";
+  const isJobs = d.capabilities.includes("jobs");
+  // Descriptor-driven: makeStub tags demo connectors; everything else is live.
+  const isReal = !d.demo;
 
   return (
     <Card className={status === "ERROR" ? "border-red-200" : undefined}>
@@ -425,6 +428,12 @@ function ConnectorCard({ connector, conn }: { connector: Connector; conn?: Conne
             <form action={syncCrmNow}>
               <input type="hidden" name="provider" value={d.provider} />
               <Button type="submit" size="sm" variant="secondary">Sync now</Button>
+            </form>
+          ) : null}
+          {isJobs && status === "CONNECTED" ? (
+            <form action={syncFsmNow}>
+              <input type="hidden" name="provider" value={d.provider} />
+              <Button type="submit" size="sm" variant="secondary">Import jobs</Button>
             </form>
           ) : null}
           {status === "CONNECTED" ? (
