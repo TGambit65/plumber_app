@@ -5,6 +5,18 @@ import { desc, eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { addEquipment, addProperty, logCustomerActivity, updatePropertyMemory } from "@/lib/actions/office";
+import {
+  archiveCustomer,
+  archiveProperty,
+  cancelMembership,
+  removeEquipment,
+  saveMembership,
+  unarchiveCustomer,
+  unarchiveProperty,
+  updateCustomer,
+  updateEquipment,
+  updateProperty,
+} from "@/lib/actions/customers";
 import { enabledCustomFieldDefs, enabledEquipmentKinds } from "@/lib/trade-packs";
 import { displayPairs } from "@/lib/custom-fields";
 import { EquipmentForm } from "@/components/office/equipment-form";
@@ -101,6 +113,89 @@ export default async function CustomerDetailPage({ params }: { params: { id: str
         }
       />
 
+      {customer.archivedAt ? (
+        <Card className="mb-4 border-slate-300 bg-slate-50">
+          <CardBody className="flex flex-wrap items-center gap-3 text-sm text-slate-700">
+            <span>📦 This customer is archived — hidden from lists and booking pickers.</span>
+            {canEdit ? (
+              <form action={unarchiveCustomer}>
+                <input type="hidden" name="customerId" value={customer.id} />
+                <Button type="submit" size="sm" variant="secondary">
+                  ♻️ Restore customer
+                </Button>
+              </form>
+            ) : null}
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {customer.smsOptOut ? (
+        <Card className="mb-4 border-amber-200 bg-amber-50/60">
+          <CardBody className="text-sm text-amber-900">
+            🔕 SMS opt-out is SET — every transactional text to this customer is skipped. Clear it in “Edit customer”.
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {/* M1: edit + archive the customer record */}
+      {canEdit ? (
+        <Card className="mb-4">
+          <CardBody className="space-y-3">
+            <details className="rounded-lg border border-slate-200">
+              <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-slate-700">✏️ Edit customer</summary>
+              <form action={updateCustomer} className="grid gap-3 border-t border-slate-100 p-3 sm:grid-cols-3">
+                <input type="hidden" name="customerId" value={customer.id} />
+                <Field label="Name">
+                  <Input name="name" required defaultValue={customer.name} />
+                </Field>
+                <Field label="Company">
+                  <Input name="company" defaultValue={customer.company ?? ""} />
+                </Field>
+                <Field label="Type">
+                  <Select name="type" defaultValue={customer.type}>
+                    <option value="RESIDENTIAL">Residential</option>
+                    <option value="COMMERCIAL">Commercial</option>
+                  </Select>
+                </Field>
+                <Field label="Phone">
+                  <Input name="phone" defaultValue={customer.phone ?? ""} />
+                </Field>
+                <Field label="Email">
+                  <Input name="email" type="email" defaultValue={customer.email ?? ""} />
+                </Field>
+                <label className="flex items-end gap-2 pb-2 text-sm text-slate-700">
+                  <input type="checkbox" name="smsOptOut" defaultChecked={customer.smsOptOut} className="h-4 w-4" />
+                  🔕 SMS opt-out (no texts)
+                </label>
+                <div className="sm:col-span-3">
+                  <Field label="Notes">
+                    <Textarea name="notes" rows={2} defaultValue={customer.notes ?? ""} />
+                  </Field>
+                </div>
+                <div className="sm:col-span-3">
+                  <Button type="submit" size="sm">
+                    Save customer
+                  </Button>
+                </div>
+              </form>
+            </details>
+            {!customer.archivedAt ? (
+              <form action={archiveCustomer}>
+                <input type="hidden" name="customerId" value={customer.id} />
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="ghost"
+                  title="Hides the customer from lists & pickers. Blocked while open jobs or unpaid invoices exist. Reversible."
+                >
+                  📦 Archive customer
+                </Button>
+              </form>
+            ) : null}
+          </CardBody>
+        </Card>
+      ) : null}
+
       {customer.notes ? (
         <Card className="mb-4">
           <CardBody className="text-sm text-slate-700">📌 {customer.notes}</CardBody>
@@ -118,10 +213,22 @@ export default async function CustomerDetailPage({ params }: { params: { id: str
                 <EmptyState title="No properties on file" hint="Add one below to start booking jobs." />
               ) : (
                 customer.properties.map((p) => (
-                  <div key={p.id} className="rounded-lg border border-slate-200 p-3">
-                    <div className="text-sm font-semibold text-slate-800">
-                      {p.label ? `${p.label} — ` : ""}
-                      {p.address}, {p.city}, {p.state} {p.zip}
+                  <div key={p.id} className={`rounded-lg border border-slate-200 p-3 ${p.archivedAt ? "opacity-60" : ""}`}>
+                    <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-800">
+                      <span>
+                        {p.label ? `${p.label} — ` : ""}
+                        {p.address}, {p.city}, {p.state} {p.zip}
+                      </span>
+                      {p.archivedAt ? <Badge tone="slate">📦 Archived</Badge> : null}
+                      {p.archivedAt && canEdit ? (
+                        <form action={unarchiveProperty}>
+                          <input type="hidden" name="propertyId" value={p.id} />
+                          <input type="hidden" name="customerId" value={customer.id} />
+                          <button type="submit" className="text-xs font-medium text-blue-600 hover:underline">
+                            ♻️ Restore
+                          </button>
+                        </form>
+                      ) : null}
                     </div>
                     <dl className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
                       <div>
@@ -146,11 +253,11 @@ export default async function CustomerDetailPage({ params }: { params: { id: str
                       </div>
                     </dl>
 
-                    {p.equipment.length > 0 ? (
+                    {p.equipment.filter((e) => !e.archivedAt).length > 0 ? (
                       <div className="mt-2 border-t border-slate-100 pt-2">
                         <div className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">Equipment</div>
                         <ul className="space-y-1 text-xs text-slate-700">
-                          {p.equipment.map((e) => {
+                          {p.equipment.filter((e) => !e.archivedAt).map((e) => {
                             const pairs = displayPairs(customFieldDefs, "equipment", e.kind, e.customFields);
                             return (
                               <li key={e.id}>
@@ -169,6 +276,43 @@ export default async function CustomerDetailPage({ params }: { params: { id: str
                                     ))}
                                   </div>
                                 ) : null}
+                                {canEdit ? (
+                                  <details className="ml-5 mt-0.5">
+                                    <summary className="cursor-pointer text-[11px] font-medium text-blue-600">Edit / remove</summary>
+                                    <form action={updateEquipment} className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
+                                      <input type="hidden" name="equipmentId" value={e.id} />
+                                      <input type="hidden" name="customerId" value={customer.id} />
+                                      <Input name="brand" placeholder="Brand" defaultValue={e.brand ?? ""} aria-label="Brand" />
+                                      <Input name="model" placeholder="Model" defaultValue={e.model ?? ""} aria-label="Model" />
+                                      <Input name="serial" placeholder="Serial #" defaultValue={e.serial ?? ""} aria-label="Serial" />
+                                      <Input
+                                        name="installedAt"
+                                        type="date"
+                                        defaultValue={e.installedAt ? e.installedAt.toISOString().slice(0, 10) : ""}
+                                        aria-label="Installed date"
+                                      />
+                                      <div className="sm:col-span-2">
+                                        <Input name="notes" placeholder="Notes" defaultValue={e.notes ?? ""} aria-label="Notes" />
+                                      </div>
+                                      <div className="flex gap-2 sm:col-span-2">
+                                        <Button type="submit" size="sm" variant="secondary">
+                                          Save equipment
+                                        </Button>
+                                      </div>
+                                    </form>
+                                    <form action={removeEquipment} className="mt-1.5">
+                                      <input type="hidden" name="equipmentId" value={e.id} />
+                                      <input type="hidden" name="customerId" value={customer.id} />
+                                      <button
+                                        type="submit"
+                                        className="text-[11px] font-medium text-red-600 hover:underline"
+                                        title="Removes it from the property record (kept for history)"
+                                      >
+                                        🗑 Remove equipment
+                                      </button>
+                                    </form>
+                                  </details>
+                                ) : null}
                               </li>
                             );
                           })}
@@ -186,6 +330,50 @@ export default async function CustomerDetailPage({ params }: { params: { id: str
                           defs={customFieldDefs}
                           action={addEquipment}
                         />
+                      </details>
+                    ) : null}
+
+                    {canEdit && !p.archivedAt ? (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-xs font-medium text-blue-600">Edit address / label</summary>
+                        <form action={updateProperty} className="mt-2 grid gap-2 sm:grid-cols-2">
+                          <input type="hidden" name="propertyId" value={p.id} />
+                          <input type="hidden" name="customerId" value={customer.id} />
+                          <Field label="Label (optional)">
+                            <Input name="label" defaultValue={p.label ?? ""} />
+                          </Field>
+                          <Field label="Address">
+                            <Input name="address" required defaultValue={p.address} />
+                          </Field>
+                          <Field label="City">
+                            <Input name="city" required defaultValue={p.city} />
+                          </Field>
+                          <div className="grid grid-cols-2 gap-2">
+                            <Field label="State">
+                              <Input name="state" required maxLength={2} defaultValue={p.state} />
+                            </Field>
+                            <Field label="ZIP">
+                              <Input name="zip" required defaultValue={p.zip} />
+                            </Field>
+                          </div>
+                          <div className="flex items-center gap-3 sm:col-span-2">
+                            <Button type="submit" size="sm">
+                              Save address
+                            </Button>
+                            <span className="text-[11px] text-slate-400">Changing the address re-geocodes the property.</span>
+                          </div>
+                        </form>
+                        <form action={archiveProperty} className="mt-2">
+                          <input type="hidden" name="propertyId" value={p.id} />
+                          <input type="hidden" name="customerId" value={customer.id} />
+                          <button
+                            type="submit"
+                            className="text-xs font-medium text-red-600 hover:underline"
+                            title="Blocked while open jobs reference this property. Reversible."
+                          >
+                            📦 Archive property
+                          </button>
+                        </form>
                       </details>
                     ) : null}
 
@@ -424,6 +612,67 @@ export default async function CustomerDetailPage({ params }: { params: { id: str
 
         {/* Right 1/3: timeline */}
         <div className="space-y-4">
+          {/* M1: membership management */}
+          <Card>
+            <CardHeader
+              title="★ Membership"
+              subtitle={customer.membership ? `${customer.membership.plan} · ${statusLabel(customer.membership.status)}` : "No plan on file"}
+            />
+            <CardBody className="space-y-3">
+              {customer.membership ? (
+                <p className="text-xs text-slate-500">
+                  {customer.membership.status === "ACTIVE" ? "Renews" : "Was set to renew"}{" "}
+                  {customer.membership.renewsAt ? fmtDate(customer.membership.renewsAt) : "— no date set"}
+                </p>
+              ) : null}
+              {canEdit ? (
+                <>
+                  <details className="rounded-lg border border-slate-200">
+                    <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-700">
+                      {customer.membership ? "✏️ Edit membership" : "＋ Add membership"}
+                    </summary>
+                    <form action={saveMembership} className="space-y-2 border-t border-slate-100 p-3">
+                      <input type="hidden" name="customerId" value={customer.id} />
+                      <Field label="Plan">
+                        <Input
+                          name="plan"
+                          required
+                          defaultValue={customer.membership?.plan ?? ""}
+                          placeholder="e.g. Zebra Care Gold"
+                        />
+                      </Field>
+                      <Field label="Status">
+                        <Select name="status" defaultValue={customer.membership?.status ?? "ACTIVE"}>
+                          <option value="ACTIVE">Active</option>
+                          <option value="PAUSED">Paused</option>
+                          <option value="CANCELLED">Cancelled</option>
+                        </Select>
+                      </Field>
+                      <Field label="Renews on">
+                        <Input
+                          name="renewsAt"
+                          type="date"
+                          defaultValue={customer.membership?.renewsAt ? customer.membership.renewsAt.toISOString().slice(0, 10) : ""}
+                        />
+                      </Field>
+                      <Button type="submit" size="sm">
+                        Save membership
+                      </Button>
+                    </form>
+                  </details>
+                  {customer.membership && customer.membership.status !== "CANCELLED" ? (
+                    <form action={cancelMembership}>
+                      <input type="hidden" name="customerId" value={customer.id} />
+                      <Button type="submit" size="sm" variant="ghost">
+                        Cancel membership
+                      </Button>
+                    </form>
+                  ) : null}
+                </>
+              ) : null}
+            </CardBody>
+          </Card>
+
           <Card>
             <CardHeader title="Add to timeline" />
             <CardBody>

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { t, withTenant } from "@/db";
-import { asc, ilike, or } from "drizzle-orm";
+import { and, asc, ilike, isNotNull, isNull, or } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { createCustomer } from "@/lib/actions/office";
@@ -27,21 +27,27 @@ export const dynamic = "force-dynamic";
 const UNPAID = new Set(["SENT", "PARTIAL", "OVERDUE"]);
 const OPEN_JOB = new Set(["UNSCHEDULED", "SCHEDULED", "DISPATCHED", "EN_ROUTE", "IN_PROGRESS"]);
 
-export default async function CustomersPage({ searchParams }: { searchParams: { q?: string } }) {
+export default async function CustomersPage({ searchParams }: { searchParams: { q?: string; archived?: string } }) {
   const session = await requireSession();
   const q = (searchParams.q ?? "").trim();
   const like = `%${q}%`;
+  const showArchived = searchParams.archived === "1";
 
+  // M1: archived customers are hidden by default; ?archived=1 shows ONLY them.
+  const archivedCond = showArchived ? isNotNull(t.customers.archivedAt) : isNull(t.customers.archivedAt);
   const customers = await withTenant(session.organizationId, (tx) =>
     tx.query.customers.findMany({
       where: q
-        ? or(
-            ilike(t.customers.name, like),
-            ilike(t.customers.company, like),
-            ilike(t.customers.phone, like),
-            ilike(t.customers.email, like)
+        ? and(
+            archivedCond,
+            or(
+              ilike(t.customers.name, like),
+              ilike(t.customers.company, like),
+              ilike(t.customers.phone, like),
+              ilike(t.customers.email, like)
+            )
           )
-        : undefined,
+        : archivedCond,
       with: {
         properties: { columns: { id: true } },
         jobs: { columns: { id: true, status: true } },
@@ -67,6 +73,12 @@ export default async function CustomersPage({ searchParams }: { searchParams: { 
             <Button type="submit" variant="secondary">
               Search
             </Button>
+            <Link
+              href={showArchived ? "/customers" : "/customers?archived=1"}
+              className="rounded-full border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            >
+              {showArchived ? "← Back to active customers" : "📦 Show archived"}
+            </Link>
             {q ? (
               <Link href="/customers" className="text-xs text-blue-600 hover:underline">
                 Clear

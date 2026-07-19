@@ -188,6 +188,178 @@ export async function moveLeadStage(formData: FormData) {
   revalidateSales(leadId);
 }
 
+// ── Leads: M1 management (edit / reassign / link / reopen / archive) ─────────
+
+const LEAD_SOURCES = ["PHONE", "WEB_FORM", "GOOGLE_LSA", "ANGI", "REFERRAL", "TECH_FLAGGED", "SMS", "OTHER"] as const;
+
+/** Edit a lead's descriptive fields. */
+export async function updateLead(formData: FormData) {
+  const session = await guard("pipeline.manage");
+  const leadId = str(formData, "leadId");
+  const title = str(formData, "title");
+  const contactName = str(formData, "contactName");
+  if (!leadId || !title || !contactName) return;
+  const sourceRaw = str(formData, "source");
+  const source = (LEAD_SOURCES as readonly string[]).includes(sourceRaw)
+    ? (sourceRaw as (typeof LEAD_SOURCES)[number])
+    : undefined;
+
+  const lead = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.leads.findFirst({ where: eq(t.leads.id, leadId) });
+    if (!existing) return null;
+    await tx
+      .update(t.leads)
+      .set({
+        title,
+        contactName,
+        phone: str(formData, "phone") || null,
+        email: str(formData, "email") || null,
+        description: str(formData, "description") || null,
+        estValueCents: dollarsToCents(formData, "estValue"),
+        ...(source ? { source } : {}),
+      })
+      .where(eq(t.leads.id, leadId));
+    return existing;
+  });
+  if (!lead) return;
+
+  await audit(session.userId, "UPDATE", "Lead", leadId, { title });
+  await logActivity({
+    kind: "SYSTEM",
+    body: `Lead details updated by ${session.name}`,
+    userId: session.userId,
+    leadId,
+    customerId: lead.customerId ?? undefined,
+  });
+  revalidateSales(leadId);
+}
+
+/** Reassign the lead to another rep (audited; notifies the new owner). */
+export async function reassignLead(formData: FormData) {
+  const session = await guard("pipeline.manage");
+  const leadId = str(formData, "leadId");
+  const assignedToId = str(formData, "assignedToId") || null;
+  if (!leadId) return;
+
+  const lead = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.leads.findFirst({ where: eq(t.leads.id, leadId) });
+    if (!existing) return null;
+    await tx.update(t.leads).set({ assignedToId }).where(eq(t.leads.id, leadId));
+    return existing;
+  });
+  if (!lead) return;
+
+  await audit(session.userId, "LEAD_REASSIGNED", "Lead", leadId, {
+    from: lead.assignedToId,
+    to: assignedToId,
+  });
+  await logActivity({
+    kind: "SYSTEM",
+    body: assignedToId ? `Lead reassigned by ${session.name}` : `Lead unassigned by ${session.name}`,
+    userId: session.userId,
+    leadId,
+    customerId: lead.customerId ?? undefined,
+  });
+  if (assignedToId && assignedToId !== session.userId) {
+    await notify(assignedToId, `Lead assigned to you: ${lead.title}`, "Reassigned — take a look.", `/leads/${leadId}`);
+  }
+  revalidateSales(leadId);
+}
+
+/** Link (or re-link) the lead to a customer and optionally one of their properties. */
+export async function linkLeadCustomer(formData: FormData) {
+  const session = await guard("pipeline.manage");
+  const leadId = str(formData, "leadId");
+  const customerId = str(formData, "customerId");
+  if (!leadId || !customerId) return;
+  const propertyId = str(formData, "propertyId") || null;
+
+  const customer = await withTenant(session.organizationId, async (tx) => {
+    const cust = await tx.query.customers.findFirst({ where: eq(t.customers.id, customerId) });
+    if (!cust) throw new Error("Customer not found");
+    if (propertyId) {
+      const prop = await tx.query.properties.findFirst({ where: eq(t.properties.id, propertyId) });
+      if (!prop || prop.customerId !== customerId) throw new Error("Property does not belong to that customer");
+    }
+    await tx.update(t.leads).set({ customerId, propertyId }).where(eq(t.leads.id, leadId));
+    return cust;
+  });
+
+  await logActivity({
+    kind: "SYSTEM",
+    body: `Lead linked to customer ${customer.name}`,
+    userId: session.userId,
+    leadId,
+    customerId,
+  });
+  revalidateSales(leadId);
+}
+
+/** Reopen a WON/LOST lead back into FOLLOW_UP with a required reason. */
+export async function reopenLead(formData: FormData) {
+  const session = await guard("pipeline.manage");
+  const leadId = str(formData, "leadId");
+  const reason = str(formData, "reason");
+  if (!leadId) return;
+  if (!reason) throw new Error("A reopen reason is required");
+
+  const lead = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.leads.findFirst({ where: eq(t.leads.id, leadId) });
+    if (!existing) return null;
+    if (existing.stage !== "WON" && existing.stage !== "LOST") {
+      throw new Error("Only WON or LOST leads can be reopened.");
+    }
+    await tx
+      .update(t.leads)
+      .set({ stage: "FOLLOW_UP", lostReason: null, lastContactAt: new Date() })
+      .where(eq(t.leads.id, leadId));
+    return existing;
+  });
+  if (!lead) return;
+
+  await audit(session.userId, "LEAD_REOPENED", "Lead", leadId, { from: lead.stage, reason });
+  await logActivity({
+    kind: "STATUS",
+    body: `Lead reopened (${lead.stage} → FOLLOW_UP) — ${reason}`,
+    userId: session.userId,
+    leadId,
+    customerId: lead.customerId ?? undefined,
+  });
+  revalidateSales(leadId);
+}
+
+/** Archive a junk/duplicate lead — excluded from pipeline + SLA stats. */
+export async function archiveLead(formData: FormData) {
+  const session = await guard("pipeline.manage");
+  const leadId = str(formData, "leadId");
+  if (!leadId) return;
+  const lead = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.leads.findFirst({ where: eq(t.leads.id, leadId) });
+    if (!existing) return null;
+    await tx.update(t.leads).set({ archivedAt: new Date() }).where(eq(t.leads.id, leadId));
+    return existing;
+  });
+  if (!lead) return;
+  await audit(session.userId, "LEAD_ARCHIVED", "Lead", leadId, { title: lead.title });
+  revalidateSales(leadId);
+  redirect("/leads");
+}
+
+export async function unarchiveLead(formData: FormData) {
+  const session = await guard("pipeline.manage");
+  const leadId = str(formData, "leadId");
+  if (!leadId) return;
+  const lead = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.leads.findFirst({ where: eq(t.leads.id, leadId) });
+    if (!existing?.archivedAt) return null;
+    await tx.update(t.leads).set({ archivedAt: null }).where(eq(t.leads.id, leadId));
+    return existing;
+  });
+  if (!lead) return;
+  await audit(session.userId, "LEAD_UNARCHIVED", "Lead", leadId, { title: lead.title });
+  revalidateSales(leadId);
+}
+
 export async function addLeadNote(formData: FormData) {
   const session = await requireSession();
   const leadId = str(formData, "leadId");

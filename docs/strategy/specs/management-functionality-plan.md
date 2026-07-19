@@ -1,6 +1,6 @@
 # Management Functionality Plan — full CRUD/lifecycle across every side-menu screen
 
-**Status: PROPOSED** · Phases M1–M6 below are sequenced for execution.
+**Status: IN PROGRESS** — M1 ✅ DONE · M2–M6 pending.
 
 ## 1. The problem
 
@@ -58,9 +58,20 @@ Headline findings:
 
 ## 3. Phases
 
-### Phase M1 — Core records: jobs, customers, leads (the daily-driver gap)
+### Phase M1 — Core records: jobs, customers, leads ✅ DONE
 
 The records office staff touch hourly. Highest impact, most-reported pain.
+Shipped exactly as specified below, plus a shared pure rules module
+(`src/lib/manage/lifecycle.ts` — revert map, reschedule/cancel/archive
+guards, archive blockers with human-readable reasons) and new action modules
+`src/lib/actions/jobs.ts` / `src/lib/actions/customers.ts` (+ lead actions
+in `sales.ts`). Schema: `archived_at` on customers/properties/equipment/
+leads (jobs reuse the existing `deleted_at`/`deleted_by_id`).
+Verified: 13 new unit tests (126 total) + 38-check Playwright e2e
+(`verify-m1.mjs`): every action exercised through the real UI with DB and
+audit-row assertions; archive guards refuse open work; archived records
+vanish from lists/pickers/pipeline and return via "📦 Show archived";
+reschedule PATCHes the same calendar event and cancel deletes it.
 
 **Jobs** (`jobs/[id]`, dispatch board)
 - `updateJob`: jobType, description, internalNotes, priority.

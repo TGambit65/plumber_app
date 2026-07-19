@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { t, withTenant } from "@/db";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, isNull, isNotNull } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { money } from "@/lib/format";
@@ -29,7 +29,7 @@ const STAGES = ["NEW", "CONTACTED", "ESTIMATE_SCHEDULED", "ESTIMATE_SENT", "FOLL
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: { stage?: string; source?: string };
+  searchParams: { stage?: string; source?: string; archived?: string };
 }) {
   const session = await requireSession();
   if (!can(session.role, "leads.create")) return <Forbidden />;
@@ -40,6 +40,8 @@ export default async function LeadsPage({
   const [allLeads, reps] = await withTenant(session.organizationId, (tx) =>
     Promise.all([
       tx.query.leads.findMany({
+        // M1: archived leads hidden by default; ?archived=1 shows ONLY them.
+        where: searchParams.archived === "1" ? isNotNull(t.leads.archivedAt) : isNull(t.leads.archivedAt),
         with: { assignedTo: true, customer: true },
         orderBy: [desc(t.leads.createdAt)],
       }),
@@ -91,6 +93,12 @@ export default async function LeadsPage({
         <button type="submit" className={buttonClass("secondary", "md")}>
           Filter
         </button>
+        <Link
+          href={searchParams.archived === "1" ? "/leads" : "/leads?archived=1"}
+          className="rounded-full border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+        >
+          {searchParams.archived === "1" ? "← Back to active leads" : "📦 Show archived"}
+        </Link>
         {(stageFilter || sourceFilter) && (
           <Link href="/leads" className={buttonClass("ghost", "md")}>
             Clear

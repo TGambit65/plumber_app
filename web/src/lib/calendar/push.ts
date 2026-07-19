@@ -71,6 +71,26 @@ export async function pushJobToCalendar(organizationId: string, jobId: string): 
   }
 }
 
+/** Remove a job's mirrored calendar event (cancel/unschedule — M1). Loud, never throws. */
+export async function removeJobFromCalendar(organizationId: string, jobId: string): Promise<void> {
+  try {
+    const job = await withTenant(organizationId, (tx) =>
+      tx.query.jobs.findFirst({ where: eq(t.jobs.id, jobId), columns: { id: true, number: true, calendarEventId: true } })
+    );
+    if (!job?.calendarEventId) return;
+    const cal = await connectedCalendar(organizationId);
+    if (cal) {
+      const result = await cal.ops.deleteEvent(job.calendarEventId);
+      if (!result.ok) console.error(`[calendar delete] job ${job.number}: ${result.message}`);
+    }
+    await withTenant(organizationId, (tx) =>
+      tx.update(t.jobs).set({ calendarEventId: null }).where(eq(t.jobs.id, jobId))
+    );
+  } catch (e) {
+    console.error(`[calendar delete] ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 /** The org calendar's busy windows for a day (for soft-conflict display). */
 export async function busyWindowsForDay(
   organizationId: string,

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { t, withTenant } from "@/db";
-import { and, asc, desc, eq, ilike, or, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, isNotNull, isNull, or, type SQL } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import {
   Badge,
@@ -29,7 +29,7 @@ type JobStatus = (typeof STATUSES)[number];
 export default async function JobsPage({
   searchParams,
 }: {
-  searchParams: { status?: string; tech?: string; q?: string };
+  searchParams: { status?: string; tech?: string; q?: string; archived?: string };
 }) {
   const session = await requireSession();
 
@@ -38,8 +38,11 @@ export default async function JobsPage({
     ? (searchParams.status as JobStatus)
     : undefined;
   const techId = (searchParams.tech ?? "").trim();
+  const showArchived = searchParams.archived === "1";
 
   const conds: SQL[] = [];
+  // M1: archived jobs are hidden by default; ?archived=1 shows ONLY them.
+  conds.push(showArchived ? isNotNull(t.jobs.deletedAt) : isNull(t.jobs.deletedAt));
   if (status) conds.push(eq(t.jobs.status, status));
   if (techId) conds.push(eq(t.jobs.assignedToId, techId));
   if (q) {
@@ -98,6 +101,13 @@ export default async function JobsPage({
             <Button type="submit" variant="secondary">
               Filter
             </Button>
+            {showArchived ? <input type="hidden" name="archived" value="1" /> : null}
+            <Link
+              href={showArchived ? "/jobs" : "/jobs?archived=1"}
+              className="rounded-full border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            >
+              {showArchived ? "← Back to active jobs" : "📦 Show archived"}
+            </Link>
             {q || status || techId ? (
               <Link href="/jobs" className="text-xs text-blue-600 hover:underline">
                 Clear filters

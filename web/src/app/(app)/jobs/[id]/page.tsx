@@ -13,6 +13,16 @@ import {
   flagOpportunity,
 } from "@/lib/actions/field";
 import {
+  archiveJob,
+  cancelJob,
+  rescheduleJob,
+  revertJobStatus,
+  unarchiveJob,
+  updateJob,
+} from "@/lib/actions/jobs";
+import { can } from "@/lib/permissions";
+import { jobArchiveBlocker, jobCancelBlocker, jobRescheduleBlocker, jobRevertTarget, type JobStatus } from "@/lib/manage/lifecycle";
+import {
   Badge,
   Card,
   CardBody,
@@ -90,7 +100,7 @@ export default async function JobDetailPage({ params }: { params: { id: string }
     });
     if (!job) return null;
 
-    const [priorJobs, priceBook, customerTexts] = await Promise.all([
+    const [priorJobs, priceBook, customerTexts, techs] = await Promise.all([
       tx.query.jobs.findMany({
         where: and(eq(t.jobs.propertyId, job.propertyId), ne(t.jobs.id, job.id)),
         orderBy: desc(t.jobs.createdAt),
@@ -107,11 +117,28 @@ export default async function JobDetailPage({ params }: { params: { id: string }
         orderBy: desc(t.outboundMessages.createdAt),
         limit: 12,
       }),
+      tx.query.users.findMany({
+        where: and(eq(t.users.role, "TECH"), eq(t.users.active, true)),
+        orderBy: asc(t.users.name),
+      }),
     ]);
-    return { job, priorJobs, priceBook, customerTexts };
+    return { job, priorJobs, priceBook, customerTexts, techs };
   });
   if (!data) notFound();
-  const { job, priorJobs, priceBook, customerTexts } = data;
+  const { job, priorJobs, priceBook, customerTexts, techs } = data;
+
+  // M1 management affordances (dispatch.manage-gated).
+  const canManage = can(session.role, "dispatch.manage");
+  const revertTo = jobRevertTarget(job.status as JobStatus);
+  const cancelBlocked = jobCancelBlocker(job.status as JobStatus);
+  const rescheduleBlocked = jobRescheduleBlocker(job.status as JobStatus);
+  const archiveBlocked = jobArchiveBlocker(job.status as JobStatus);
+  const durationMin =
+    job.scheduledAt && job.scheduledEnd
+      ? Math.max(15, Math.round((job.scheduledEnd.getTime() - job.scheduledAt.getTime()) / 60_000))
+      : 120;
+  const toLocalInput = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}T${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 
   const next = NEXT_STEP[job.status];
   const mapsHref = `https://maps.google.com/?q=${encodeURIComponent(
@@ -443,6 +470,142 @@ export default async function JobDetailPage({ params }: { params: { id: string }
 
         {/* ── Side column ── */}
         <div className="space-y-4">
+          {/* M1: Manage job — edit / reschedule / cancel / revert / archive */}
+          {canManage ? (
+            <Card className="border-slate-300">
+              <CardHeader title="🛠 Manage job" subtitle="Edit, reschedule, cancel or archive" />
+              <CardBody className="space-y-3">
+                {job.deletedAt ? (
+                  <div className="rounded-lg bg-slate-100 p-2.5 text-xs text-slate-700">
+                    📦 Archived {fmtDateTime(job.deletedAt)}.
+                    <form action={unarchiveJob} className="mt-2">
+                      <input type="hidden" name="jobId" value={job.id} />
+                      <button type="submit" className={buttonClass("secondary", "sm", "w-full")}>
+                        ♻️ Restore job
+                      </button>
+                    </form>
+                  </div>
+                ) : null}
+
+                {/* Edit details */}
+                <details className="rounded-lg border border-slate-200">
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-700">✏️ Edit details</summary>
+                  <form action={updateJob} className="space-y-2 border-t border-slate-100 p-3">
+                    <input type="hidden" name="jobId" value={job.id} />
+                    <Field label="Job type">
+                      <Input name="jobType" required defaultValue={job.jobType} />
+                    </Field>
+                    <Field label="Priority">
+                      <Select name="priority" defaultValue={job.priority}>
+                        <option value="LOW">Low</option>
+                        <option value="NORMAL">Normal</option>
+                        <option value="HIGH">High</option>
+                        <option value="EMERGENCY">Emergency</option>
+                      </Select>
+                    </Field>
+                    <Field label="Description">
+                      <Textarea name="description" rows={2} defaultValue={job.description ?? ""} />
+                    </Field>
+                    <Field label="Internal notes (never shown to the customer)">
+                      <Textarea name="internalNotes" rows={2} defaultValue={job.internalNotes ?? ""} />
+                    </Field>
+                    <button type="submit" className={buttonClass("secondary", "sm", "w-full")}>
+                      Save details
+                    </button>
+                  </form>
+                </details>
+
+                {/* Reschedule / reassign */}
+                <details className="rounded-lg border border-slate-200">
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-700">📅 Reschedule / reassign</summary>
+                  <div className="border-t border-slate-100 p-3">
+                    {rescheduleBlocked ? (
+                      <p className="text-xs text-slate-500">{rescheduleBlocked}</p>
+                    ) : (
+                      <form action={rescheduleJob} className="space-y-2">
+                        <input type="hidden" name="jobId" value={job.id} />
+                        <Field label="Start">
+                          <Input
+                            type="datetime-local"
+                            name="scheduledAt"
+                            required
+                            defaultValue={job.scheduledAt ? toLocalInput(job.scheduledAt) : ""}
+                          />
+                        </Field>
+                        <Field label="Duration">
+                          <Select name="durationMin" defaultValue={String(durationMin)}>
+                            {[60, 90, 120, 180, 240, 360, 480].map((m) => (
+                              <option key={m} value={m}>
+                                {m / 60} hour{m > 60 ? "s" : ""}
+                              </option>
+                            ))}
+                          </Select>
+                        </Field>
+                        <Field label="Technician">
+                          <Select name="techId" defaultValue={job.assignedToId ?? ""}>
+                            <option value="">Unassigned (back to the lane)</option>
+                            {techs.map((tech) => (
+                              <option key={tech.id} value={tech.id}>
+                                {tech.name}
+                              </option>
+                            ))}
+                          </Select>
+                        </Field>
+                        <button type="submit" className={buttonClass("secondary", "sm", "w-full")}>
+                          Save schedule
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                </details>
+
+                {/* Step back */}
+                {revertTo ? (
+                  <form action={revertJobStatus}>
+                    <input type="hidden" name="jobId" value={job.id} />
+                    <button
+                      type="submit"
+                      className={buttonClass("ghost", "sm", "w-full")}
+                      title="Fix a mis-tap — steps the status back one place and stops any running clock"
+                    >
+                      ↩️ Step back to {statusLabel(revertTo)}
+                    </button>
+                  </form>
+                ) : null}
+
+                {/* Cancel */}
+                {!cancelBlocked ? (
+                  <details className="rounded-lg border border-red-200">
+                    <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-red-700">🛑 Cancel job…</summary>
+                    <form action={cancelJob} className="space-y-2 border-t border-red-100 p-3">
+                      <input type="hidden" name="jobId" value={job.id} />
+                      <Field label="Reason (required — goes to the timeline & audit log)">
+                        <Textarea name="reason" rows={2} required placeholder="e.g. customer cancelled, duplicate booking…" />
+                      </Field>
+                      <button type="submit" className={buttonClass("danger", "sm", "w-full")}>
+                        Cancel this job
+                      </button>
+                    </form>
+                  </details>
+                ) : null}
+
+                {/* Archive */}
+                {!archiveBlocked && !job.deletedAt ? (
+                  <form action={archiveJob}>
+                    <input type="hidden" name="jobId" value={job.id} />
+                    <button
+                      type="submit"
+                      className={buttonClass("ghost", "sm", "w-full")}
+                      title="Hides the job from lists — reversible any time"
+                    >
+                      📦 Archive job
+                    </button>
+                  </form>
+                ) : null}
+              </CardBody>
+            </Card>
+          ) : null}
+
           {/* Customer & property */}
           <Card>
             <CardHeader

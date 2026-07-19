@@ -1,12 +1,12 @@
 import Link from "next/link";
 import { t, withTenant } from "@/db";
-import { desc } from "drizzle-orm";
+import { desc, isNull } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { money } from "@/lib/format";
 import { Avatar, Badge, PageHeader, leadStageTone, statusLabel } from "@/components/ui";
 import { Forbidden, SOURCE_META } from "@/components/sales/meta";
-import { moveLeadStage } from "@/lib/actions/sales";
+import { moveLeadStage, setLeadStage } from "@/lib/actions/sales";
 import { clsx } from "@/lib/clsx";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +34,8 @@ export default async function PipelinePage() {
 
   const leads = await withTenant(session.organizationId, (tx) =>
     tx.query.leads.findMany({
+      // M1: archived leads never appear on the board.
+      where: isNull(t.leads.archivedAt),
       with: { assignedTo: true },
       orderBy: [desc(t.leads.createdAt)],
     })
@@ -107,6 +109,43 @@ export default async function PipelinePage() {
                             </span>
                             {l.assignedTo ? <Avatar name={l.assignedTo.name} size="sm" /> : null}
                           </div>
+                          {/* M1: jump straight to any stage (LOST requires a reason) */}
+                          <details className="mt-2 border-t border-slate-100 pt-2">
+                            <summary className="cursor-pointer text-[11px] font-medium text-slate-500 hover:text-blue-600">
+                              ⤵ Jump to stage…
+                            </summary>
+                            <form action={setLeadStage} className="mt-1.5 space-y-1.5">
+                              <input type="hidden" name="leadId" value={l.id} />
+                              <select
+                                name="stage"
+                                defaultValue=""
+                                required
+                                aria-label="Jump to stage"
+                                className="h-7 w-full rounded-md border border-slate-300 px-1.5 text-[11px]"
+                              >
+                                <option value="" disabled>
+                                  Choose stage…
+                                </option>
+                                {STAGES.filter((s) => s !== stage).map((s) => (
+                                  <option key={s} value={s}>
+                                    {statusLabel(s)}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                name="lostReason"
+                                placeholder="Reason (required for Lost)"
+                                aria-label="Lost reason"
+                                className="h-7 w-full rounded-md border border-slate-300 px-1.5 text-[11px]"
+                              />
+                              <button
+                                type="submit"
+                                className="h-7 w-full rounded-md bg-slate-800 text-[11px] font-medium text-white hover:bg-slate-700"
+                              >
+                                Move
+                              </button>
+                            </form>
+                          </details>
                           <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2">
                             <form action={moveLeadStage}>
                               <input type="hidden" name="leadId" value={l.id} />

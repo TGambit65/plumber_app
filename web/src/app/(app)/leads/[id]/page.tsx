@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { t, withTenant } from "@/db";
-import { eq } from "drizzle-orm";
+import { eq, isNull } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { fmtDateTime, money, timeAgo, lineTotal } from "@/lib/format";
@@ -25,10 +25,16 @@ import {
 import { Forbidden, SlaBadge, SourceBadge } from "@/components/sales/meta";
 import {
   addLeadNote,
+  archiveLead,
   convertLeadToEstimate,
+  linkLeadCustomer,
   markFollowUpSent,
+  reassignLead,
+  reopenLead,
   setLeadStage,
   skipFollowUp,
+  unarchiveLead,
+  updateLead,
 } from "@/lib/actions/sales";
 
 export const dynamic = "force-dynamic";
@@ -51,7 +57,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   const session = await requireSession();
   if (!can(session.role, "leads.create")) return <Forbidden />;
 
-  const { lead, customers } = await withTenant(session.organizationId, async (tx) => {
+  const { lead, customers, reps } = await withTenant(session.organizationId, async (tx) => {
     const lead = await tx.query.leads.findFirst({
       where: eq(t.leads.id, params.id),
       with: {
@@ -64,9 +70,17 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
         activities: { with: { user: true } },
       },
     });
-    const customers =
-      !lead || lead.customerId ? [] : await tx.query.customers.findMany({ orderBy: [t.customers.name] });
-    return { lead, customers };
+    if (!lead) return { lead, customers: [], reps: [] };
+    // M1: customers (with properties) for linking; active reps for reassignment.
+    const [customers, reps] = await Promise.all([
+      tx.query.customers.findMany({
+        where: isNull(t.customers.archivedAt),
+        with: { properties: { where: isNull(t.properties.archivedAt) } },
+        orderBy: [t.customers.name],
+      }),
+      tx.query.users.findMany({ where: eq(t.users.active, true), orderBy: [t.users.name] }),
+    ]);
+    return { lead, customers, reps: reps.filter((r) => r.role === "SALES_PM" || r.role === "ADMIN") };
   });
   if (!lead) notFound();
 
@@ -100,6 +114,22 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           </Link>
         }
       />
+
+      {lead.archivedAt ? (
+        <Card className="mb-4 border-slate-300 bg-slate-50">
+          <CardBody className="flex flex-wrap items-center gap-3 text-sm text-slate-700">
+            <span>📦 This lead is archived — excluded from the pipeline and SLA stats.</span>
+            {canManage ? (
+              <form action={unarchiveLead}>
+                <input type="hidden" name="leadId" value={lead.id} />
+                <Button type="submit" size="sm" variant="secondary">
+                  ♻️ Restore lead
+                </Button>
+              </form>
+            ) : null}
+          </CardBody>
+        </Card>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
         {/* Main column */}
@@ -196,6 +226,150 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
                     </div>
                     <Button size="sm" variant="danger">
                       Mark lost
+                    </Button>
+                  </form>
+                ) : null}
+              </CardBody>
+            </Card>
+          ) : null}
+
+          {/* M1: Manage lead — edit / reassign / link / reopen / archive */}
+          {canManage ? (
+            <Card>
+              <CardHeader title="🛠 Manage lead" subtitle="Edit details, reassign, link a customer, reopen or archive" />
+              <CardBody className="space-y-3">
+                {/* Edit details */}
+                <details className="rounded-lg border border-slate-200">
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-700">✏️ Edit details</summary>
+                  <form action={updateLead} className="grid gap-2 border-t border-slate-100 p-3 sm:grid-cols-2">
+                    <input type="hidden" name="leadId" value={lead.id} />
+                    <div className="sm:col-span-2">
+                      <Field label="Title">
+                        <Input name="title" required defaultValue={lead.title} />
+                      </Field>
+                    </div>
+                    <Field label="Contact name">
+                      <Input name="contactName" required defaultValue={lead.contactName} />
+                    </Field>
+                    <Field label="Source">
+                      <Select name="source" defaultValue={lead.source}>
+                        {["PHONE", "WEB_FORM", "GOOGLE_LSA", "ANGI", "REFERRAL", "TECH_FLAGGED", "SMS", "OTHER"].map((s) => (
+                          <option key={s} value={s}>
+                            {statusLabel(s)}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="Phone">
+                      <Input name="phone" defaultValue={lead.phone ?? ""} />
+                    </Field>
+                    <Field label="Email">
+                      <Input name="email" type="email" defaultValue={lead.email ?? ""} />
+                    </Field>
+                    <Field label="Est. value ($)">
+                      <Input
+                        name="estValue"
+                        type="number"
+                        min="0"
+                        step="any"
+                        defaultValue={lead.estValueCents != null ? String(lead.estValueCents / 100) : ""}
+                      />
+                    </Field>
+                    <div className="sm:col-span-2">
+                      <Field label="Description">
+                        <Textarea name="description" rows={2} defaultValue={lead.description ?? ""} />
+                      </Field>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <Button type="submit" size="sm">
+                        Save details
+                      </Button>
+                    </div>
+                  </form>
+                </details>
+
+                {/* Reassign */}
+                <form action={reassignLead} className="flex flex-wrap items-end gap-2">
+                  <input type="hidden" name="leadId" value={lead.id} />
+                  <div className="w-56">
+                    <Field label="Assigned rep">
+                      <Select name="assignedToId" defaultValue={lead.assignedToId ?? ""}>
+                        <option value="">Unassigned</option>
+                        {reps.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  </div>
+                  <Button type="submit" size="sm" variant="secondary">
+                    Reassign
+                  </Button>
+                </form>
+
+                {/* Link customer + property */}
+                <form action={linkLeadCustomer} className="flex flex-wrap items-end gap-2">
+                  <input type="hidden" name="leadId" value={lead.id} />
+                  <div className="w-56">
+                    <Field label="Linked customer">
+                      <Select name="customerId" required defaultValue={lead.customerId ?? ""}>
+                        <option value="" disabled>
+                          Choose customer…
+                        </option>
+                        {customers.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  </div>
+                  <div className="w-64">
+                    <Field label="Property (optional)">
+                      <Select name="propertyId" defaultValue={lead.propertyId ?? ""}>
+                        <option value="">—</option>
+                        {customers.flatMap((c) =>
+                          c.properties.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {c.name} — {p.address}
+                            </option>
+                          ))
+                        )}
+                      </Select>
+                    </Field>
+                  </div>
+                  <Button type="submit" size="sm" variant="secondary">
+                    Link
+                  </Button>
+                </form>
+
+                {/* Reopen closed lead */}
+                {lead.stage === "WON" || lead.stage === "LOST" ? (
+                  <form action={reopenLead} className="flex flex-wrap items-end gap-2 border-t border-slate-100 pt-3">
+                    <input type="hidden" name="leadId" value={lead.id} />
+                    <div className="w-64">
+                      <Field label={`Reopen this ${lead.stage} lead — reason (required)`}>
+                        <Input name="reason" required placeholder="e.g. customer came back" />
+                      </Field>
+                    </div>
+                    <Button type="submit" size="sm" variant="secondary">
+                      ♻️ Reopen → Follow-up
+                    </Button>
+                  </form>
+                ) : null}
+
+                {/* Archive */}
+                {!lead.archivedAt ? (
+                  <form action={archiveLead} className="border-t border-slate-100 pt-3">
+                    <input type="hidden" name="leadId" value={lead.id} />
+                    <Button
+                      type="submit"
+                      size="sm"
+                      variant="ghost"
+                      title="For junk or duplicate leads — drops it from the pipeline and SLA stats. Reversible."
+                    >
+                      📦 Archive lead
                     </Button>
                   </form>
                 ) : null}

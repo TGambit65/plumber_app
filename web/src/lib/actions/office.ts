@@ -46,6 +46,11 @@ export async function assignJob(formData: FormData) {
   if (!jobId || !techId || !when) return;
 
   const scheduledAt = new Date(when);
+  // M1: capture duration → scheduledEnd (default 120 min).
+  const durationMin = parseInt(str(formData, "durationMin") || "120", 10);
+  const scheduledEnd = new Date(
+    scheduledAt.getTime() + (Number.isFinite(durationMin) && durationMin > 0 ? durationMin : 120) * 60_000
+  );
   const job = await withTenant(session.organizationId, async (tx) => {
     const found = await tx.query.jobs.findFirst({
       where: eq(t.jobs.id, jobId),
@@ -55,7 +60,7 @@ export async function assignJob(formData: FormData) {
 
     await tx
       .update(t.jobs)
-      .set({ assignedToId: techId, scheduledAt, status: "SCHEDULED" })
+      .set({ assignedToId: techId, scheduledAt, scheduledEnd, status: "SCHEDULED" })
       .where(eq(t.jobs.id, jobId));
     return found;
   });
@@ -111,11 +116,17 @@ export async function bookJob(formData: FormData) {
   const jobType = jobTypeOther || (jobTypeSelect === "__OTHER__" ? "" : jobTypeSelect);
   const priority = pick(str(formData, "priority"), JOB_PRIORITIES, "NORMAL");
   const description = str(formData, "description");
+  const internalNotes = str(formData, "internalNotes");
   const scheduledStr = str(formData, "scheduledAt");
   const techId = str(formData, "techId");
   if (!customerId || !propertyId || !jobType) return;
 
   const scheduledAt = scheduledStr ? new Date(scheduledStr) : null;
+  // M1: duration → scheduledEnd on booked-with-time jobs (default 120 min).
+  const durationMin = parseInt(str(formData, "durationMin") || "120", 10);
+  const scheduledEnd = scheduledAt
+    ? new Date(scheduledAt.getTime() + (Number.isFinite(durationMin) && durationMin > 0 ? durationMin : 120) * 60_000)
+    : null;
 
   const created = await withTenant(session.organizationId, async (tx) => {
     // Hard cross-field validation: property must belong to the selected customer.
@@ -135,10 +146,12 @@ export async function bookJob(formData: FormData) {
         jobType,
         priority,
         description: description || null,
+        internalNotes: internalNotes || null,
         customerId,
         propertyId,
         assignedToId: techId || null,
         scheduledAt,
+        scheduledEnd,
         status: scheduledAt ? "SCHEDULED" : "UNSCHEDULED",
       })
       .returning();

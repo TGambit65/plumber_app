@@ -101,6 +101,8 @@ export const customers = pgTable("customers", {
   smsOptOut: boolean("sms_opt_out").notNull().default(false),
   /** FSM import provenance (D5), e.g. "JOBBER:12345". */
   externalRef: text("external_ref"),
+  /** Soft archive (M1) — hidden from lists/pickers, reversible. */
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -124,6 +126,8 @@ export const properties = pgTable("properties", {
   geocodedAt: timestamp("geocoded_at", { withTimezone: true }),
   /** FSM import provenance (D5). */
   externalRef: text("external_ref"),
+  /** Soft archive (M1). */
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
 });
 
 export const equipment = pgTable("equipment", {
@@ -138,6 +142,8 @@ export const equipment = pgTable("equipment", {
   notes: text("notes"),
   /** Pack-scoped custom field values (defs live in tradePacks.config.customFields). */
   customFields: jsonb("custom_fields"),
+  /** Soft archive (M1) — "removed" equipment stays for history. */
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
 });
 
 export const memberships = pgTable("memberships", {
@@ -172,6 +178,8 @@ export const leads = pgTable("leads", {
   createdById: text("created_by_id").references(() => users.id),
   techFlagged: boolean("tech_flagged").notNull().default(false),
   spiffCents: integer("spiff_cents"),
+  /** Soft archive (M1) — junk/duplicate leads; excluded from pipeline + SLA stats. */
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
 });
 
 export const followUps = pgTable("follow_ups", {

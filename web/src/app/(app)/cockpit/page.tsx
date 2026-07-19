@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { t, withTenant } from "@/db";
-import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, isNull } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { money, timeAgo, fmtTime } from "@/lib/format";
@@ -35,7 +35,7 @@ export default async function CockpitPage() {
           orderBy: [desc(t.estimates.lastViewedAt)],
         }),
         tx.query.leads.findMany({
-          where: eq(t.leads.assignedToId, session.userId),
+          where: and(eq(t.leads.assignedToId, session.userId), isNull(t.leads.archivedAt)),
         }),
         tx.query.commissionEntries.findMany({
           where: and(eq(t.commissionEntries.userId, session.userId), eq(t.commissionEntries.period, period)),

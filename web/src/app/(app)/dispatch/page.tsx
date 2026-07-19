@@ -4,6 +4,7 @@ import { and, asc, eq, gte, isNull, lt, notInArray, or } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { assignJob, bookJob } from "@/lib/actions/office";
+import { rescheduleJob, unassignJob } from "@/lib/actions/jobs";
 import { sendTomorrowReminders } from "@/lib/actions/comms";
 import { busyWindowsForDay, overlapsBusy } from "@/lib/calendar/push";
 import { fmtTime } from "@/lib/format";
@@ -89,24 +90,34 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
           orderBy: asc(t.users.name),
         }),
         tx.query.jobs.findMany({
-          where: and(gte(t.jobs.scheduledAt, day), lt(t.jobs.scheduledAt, dayEnd)),
+          where: and(gte(t.jobs.scheduledAt, day), lt(t.jobs.scheduledAt, dayEnd), isNull(t.jobs.deletedAt)),
           with: { customer: true, property: true },
           orderBy: asc(t.jobs.scheduledAt),
         }),
         tx.query.jobs.findMany({
           where: and(
             or(eq(t.jobs.status, "UNSCHEDULED"), isNull(t.jobs.assignedToId)),
-            notInArray(t.jobs.status, ["COMPLETED", "CANCELLED"])
+            notInArray(t.jobs.status, ["COMPLETED", "CANCELLED"]),
+            isNull(t.jobs.deletedAt)
           ),
           with: { customer: true, property: true },
           orderBy: asc(t.jobs.createdAt),
         }),
         tx.query.jobs.findMany({
-          where: and(eq(t.jobs.priority, "EMERGENCY"), notInArray(t.jobs.status, ["COMPLETED", "CANCELLED"])),
+          where: and(
+            eq(t.jobs.priority, "EMERGENCY"),
+            notInArray(t.jobs.status, ["COMPLETED", "CANCELLED"]),
+            isNull(t.jobs.deletedAt)
+          ),
           columns: { id: true },
         }),
-        tx.query.customers.findMany({ orderBy: asc(t.customers.name) }),
-        tx.query.properties.findMany({ with: { customer: true }, orderBy: asc(t.properties.address) }),
+        // M1: archived customers/properties never appear in booking pickers.
+        tx.query.customers.findMany({ where: isNull(t.customers.archivedAt), orderBy: asc(t.customers.name) }),
+        tx.query.properties.findMany({
+          where: isNull(t.properties.archivedAt),
+          with: { customer: true },
+          orderBy: asc(t.properties.address),
+        }),
       ])
   );
 
@@ -375,6 +386,13 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
                           aria-label="Scheduled time"
                           className="h-8 text-xs"
                         />
+                        <Select name="durationMin" defaultValue="120" aria-label="Duration" className="h-8 w-20 text-xs">
+                          {[60, 90, 120, 180, 240, 360, 480].map((m) => (
+                            <option key={m} value={m}>
+                              {m / 60}h
+                            </option>
+                          ))}
+                        </Select>
                         <Button type="submit" size="sm">
                           Assign
                         </Button>
@@ -424,6 +442,63 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
                           </div>
                         ) : null}
                         <DispatchJobCard job={job} />
+                        {/* M1: manage a placed card — edit time or send back to the lane */}
+                        {canManage && !["IN_PROGRESS", "COMPLETED", "CANCELLED"].includes(job.status) ? (
+                          <div className="mt-1 flex items-center gap-1.5">
+                            <details className="min-w-0 flex-1">
+                              <summary className="cursor-pointer rounded-md bg-slate-100 px-2 py-1 text-center text-[11px] font-medium text-slate-600 hover:bg-slate-200">
+                                🕒 Edit time
+                              </summary>
+                              <form action={rescheduleJob} className="mt-1 space-y-1 rounded-md border border-slate-200 bg-white p-1.5">
+                                <input type="hidden" name="jobId" value={job.id} />
+                                <input type="hidden" name="techId" value={tech.id} />
+                                <Input
+                                  type="datetime-local"
+                                  name="scheduledAt"
+                                  required
+                                  defaultValue={
+                                    job.scheduledAt
+                                      ? `${dateStr}T${String(job.scheduledAt.getHours()).padStart(2, "0")}:${String(job.scheduledAt.getMinutes()).padStart(2, "0")}`
+                                      : `${dateStr}T09:00`
+                                  }
+                                  aria-label="New time"
+                                  className="h-7 text-[11px]"
+                                />
+                                <div className="flex gap-1">
+                                  <Select
+                                    name="durationMin"
+                                    aria-label="Duration"
+                                    defaultValue={String(
+                                      job.scheduledAt && job.scheduledEnd
+                                        ? Math.max(15, Math.round((job.scheduledEnd.getTime() - job.scheduledAt.getTime()) / 60_000))
+                                        : 120
+                                    )}
+                                    className="h-7 flex-1 text-[11px]"
+                                  >
+                                    {[60, 90, 120, 180, 240, 360, 480].map((m) => (
+                                      <option key={m} value={m}>
+                                        {m / 60}h
+                                      </option>
+                                    ))}
+                                  </Select>
+                                  <Button type="submit" size="sm">
+                                    Save
+                                  </Button>
+                                </div>
+                              </form>
+                            </details>
+                            <form action={unassignJob}>
+                              <input type="hidden" name="jobId" value={job.id} />
+                              <button
+                                type="submit"
+                                title="Send back to the unassigned lane"
+                                className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-200"
+                              >
+                                ⏏️ Unassign
+                              </button>
+                            </form>
+                          </div>
+                        ) : null}
                         {hop && (hop.driveMinutes !== null || hop.status === "overlap") ? (
                           <div
                             className={`mt-1 rounded-md px-2 py-1 text-center text-[11px] font-medium ${
@@ -551,6 +626,15 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
               <Field label="Schedule (optional)">
                 <Input type="datetime-local" name="scheduledAt" />
               </Field>
+              <Field label="Duration">
+                <Select name="durationMin" defaultValue="120">
+                  {[60, 90, 120, 180, 240, 360, 480].map((m) => (
+                    <option key={m} value={m}>
+                      {m / 60} hour{m > 60 ? "s" : ""}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
               <Field label="Assign tech (optional)">
                 <Select name="techId" defaultValue="">
                   <option value="">Unassigned</option>
@@ -561,9 +645,12 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
                   ))}
                 </Select>
               </Field>
-              <div className="md:col-span-3">
+              <div className="md:col-span-3 grid gap-3 md:grid-cols-2">
                 <Field label="Description">
                   <Textarea name="description" rows={2} placeholder="What's going on at the property?" />
+                </Field>
+                <Field label="Internal notes (optional — never shown to the customer)">
+                  <Textarea name="internalNotes" rows={2} placeholder="Gate code, billing quirks, heads-up for the tech…" />
                 </Field>
               </div>
               <div className="md:col-span-3">
