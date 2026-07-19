@@ -49,6 +49,18 @@ describe("geo math", () => {
       () => 25
     );
     expect(tight[0].status).toBe("tight");
+
+    // Overlap: next job starts BEFORE the previous ends → double-booked,
+    // flagged even when coordinates are missing.
+    const overlap = analyzeChain(
+      [
+        { id: "X", scheduledAt: at(9), scheduledEnd: at(11), point: null },
+        { id: "Y", scheduledAt: at(10, 30), scheduledEnd: null, point: null },
+      ],
+      () => null
+    );
+    expect(overlap[0].status).toBe("overlap");
+    expect(overlap[0].gapMinutes).toBe(-30);
   });
 
   it("projectPoints maps into the viewBox with north up", () => {

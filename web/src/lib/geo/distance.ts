@@ -44,7 +44,7 @@ export interface ChainJob {
   point: LatLng | null;
 }
 
-export type HopStatus = "ok" | "tight" | "impossible" | "unknown";
+export type HopStatus = "ok" | "tight" | "impossible" | "overlap" | "unknown";
 
 export interface Hop {
   fromJobId: string;
@@ -63,6 +63,7 @@ const TIGHT_SLACK_MIN = 10;
 /**
  * Analyze a tech's day: for each consecutive pair (sorted by start), compare
  * the schedule gap to the drive time.
+ *   overlap    — the next job STARTS BEFORE this one ends (double-booked)
  *   impossible — gap < drive (they cannot make it)
  *   tight      — makes it with < 10 min slack
  *   ok         — comfortable
@@ -88,7 +89,8 @@ export function analyzeChain(
     }
 
     let status: HopStatus;
-    if (driveMinutes === null) status = "unknown";
+    if (gapMinutes < 0) status = "overlap"; // double-booked regardless of geography
+    else if (driveMinutes === null) status = "unknown";
     else if (gapMinutes < driveMinutes) status = "impossible";
     else if (gapMinutes - driveMinutes < TIGHT_SLACK_MIN) status = "tight";
     else status = "ok";

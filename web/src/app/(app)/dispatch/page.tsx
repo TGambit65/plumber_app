@@ -10,6 +10,8 @@ import { fmtTime } from "@/lib/format";
 import { analyzeChain, type ChainJob, type Hop } from "@/lib/geo/distance";
 import { driveTimeResolver } from "@/lib/geo/service";
 import { DayMap, type MapStop } from "@/components/office/day-map";
+import { buildDriveFn, buildTechDays, suggestForJobs } from "@/lib/dispatch/suggest";
+import { acceptSuggestion, dismissSuggestion } from "@/lib/actions/dispatch-ai";
 import { enabledJobTypes, enabledPacks } from "@/lib/trade-packs";
 import {
   Avatar,
@@ -158,6 +160,37 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
   }
   const impossibleCount = Array.from(hopsByTech.values()).flat().filter((h) => h.status === "impossible").length;
 
+  // ── D4: human-gated suggestions for the unassigned lane ───────────────────
+  const techDays = await buildTechDays(session.organizationId, day);
+  const unassignedCandidates = unassigned.map((j) => ({
+    id: j.id,
+    jobType: j.jobType,
+    priority: j.priority,
+    point: j.property.lat !== null && j.property.lng !== null ? { lat: j.property.lat, lng: j.property.lng } : null,
+  }));
+  const allPoints = [
+    ...techDays.flatMap((td) => td.jobs.map((j) => j.point).filter((p): p is NonNullable<typeof p> => p !== null)),
+    ...unassignedCandidates.map((c) => c.point).filter((p): p is NonNullable<typeof p> => p !== null),
+  ];
+  const driveFn = await buildDriveFn(session.organizationId, allPoints);
+  const suggestions = suggestForJobs(unassignedCandidates, techDays, day, new Date(), driveFn);
+
+  // D4 anomaly nudges — advisory, never blocking.
+  const now = Date.now();
+  const agedUnassigned = unassigned.filter((j) => now - j.createdAt.getTime() > 48 * 3600_000);
+  const overbookedTechs = techDays
+    .filter((td) => {
+      const totalMin = td.jobs.reduce((sum, j) => {
+        const end = j.scheduledEnd ?? new Date(j.scheduledAt.getTime() + 120 * 60_000);
+        return sum + (end.getTime() - j.scheduledAt.getTime()) / 60_000;
+      }, 0);
+      return totalMin > 9 * 60;
+    })
+    .map((td) => td.techName);
+  const optimizableTechIds = new Set(
+    techDays.filter((td) => td.jobs.filter((j) => j.point).length >= 3).map((td) => td.techId)
+  );
+
   const statusCounts = dayJobs.reduce<Record<string, number>>((acc, j) => {
     acc[j.status] = (acc[j.status] ?? 0) + 1;
     return acc;
@@ -241,6 +274,20 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
         </div>
       ) : null}
 
+      {/* D4: anomaly nudges — quiet flags, never modals */}
+      {agedUnassigned.length > 0 || overbookedTechs.length > 0 ? (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900">
+          <span className="font-semibold">💡 Worth a look:</span>{" "}
+          {agedUnassigned.length > 0 ? (
+            <span className="mr-3">
+              {agedUnassigned.length} unassigned job{agedUnassigned.length > 1 ? "s" : ""} aging past 48h (
+              {agedUnassigned.map((j) => j.number).join(", ")})
+            </span>
+          ) : null}
+          {overbookedTechs.length > 0 ? <span>overbooked today: {overbookedTechs.join(", ")}</span> : null}
+        </div>
+      ) : null}
+
       {/* Legend */}
       <div className="mb-4 flex flex-wrap items-center gap-1.5">
         <span className="mr-1 text-xs font-medium uppercase tracking-wide text-slate-500">Status legend</span>
@@ -275,6 +322,37 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
                   <p className="text-xs text-slate-400">
                     {job.property.address}, {job.property.city}
                   </p>
+                  {/* D4: the engine proposes, the dispatcher disposes */}
+                  {canManage && suggestions.has(job.id) ? (() => {
+                    const s = suggestions.get(job.id)!;
+                    return (
+                      <div className={`mt-2 rounded-lg border p-2 text-xs ${s.kind === "EMERGENCY" ? "border-red-200 bg-red-50" : "border-violet-200 bg-violet-50"}`}>
+                        <div className="font-semibold text-slate-800">
+                          {s.kind === "EMERGENCY" ? "🚨 Least disruption: " : "✨ Suggested: "}
+                          {s.techName} · {fmtTime(new Date(s.whenIso))}
+                        </div>
+                        <div className="mt-0.5 text-slate-600">{s.reasons.join(" · ")}</div>
+                        {s.runnerUp ? <div className="mt-0.5 text-[10px] text-slate-400">next best: {s.runnerUp}</div> : null}
+                        <div className="mt-1.5 flex gap-1.5">
+                          <form action={acceptSuggestion}>
+                            <input type="hidden" name="jobId" value={job.id} />
+                            <input type="hidden" name="techId" value={s.techId} />
+                            <input type="hidden" name="whenIso" value={s.whenIso} />
+                            <input type="hidden" name="kind" value={s.kind} />
+                            <input type="hidden" name="reasons" value={s.reasons.join("; ")} />
+                            <Button type="submit" size="sm">Accept</Button>
+                          </form>
+                          <form action={dismissSuggestion}>
+                            <input type="hidden" name="jobId" value={job.id} />
+                            <input type="hidden" name="techId" value={s.techId} />
+                            <input type="hidden" name="reasons" value={s.reasons.join("; ")} />
+                            <Button type="submit" size="sm" variant="secondary">Dismiss</Button>
+                          </form>
+                        </div>
+                      </div>
+                    );
+                  })() : null}
+
                   {canManage ? (
                     <form action={assignJob} className="mt-2 space-y-1.5">
                       <input type="hidden" name="jobId" value={job.id} />
@@ -320,6 +398,15 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
                   <div className="truncate text-sm font-semibold text-slate-800">{tech.name}</div>
                   <div className="truncate text-xs text-slate-500">{tech.truck ? `🚚 ${tech.truck.name}` : "No truck assigned"}</div>
                 </div>
+                {canManage && optimizableTechIds.has(tech.id) ? (
+                  <Link
+                    href={`/dispatch/optimize?tech=${tech.id}&date=${dateStr}`}
+                    className="rounded-md bg-violet-100 px-1.5 py-0.5 text-[11px] font-medium text-violet-700 hover:bg-violet-200"
+                    title="Propose a drive-minimizing order for this day (shown as a diff — nothing changes until you apply)"
+                  >
+                    ✨ Optimize
+                  </Link>
+                ) : null}
                 <Badge tone="blue">{jobsForTech.length}</Badge>
               </div>
               <div className="space-y-2">
@@ -337,10 +424,10 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
                           </div>
                         ) : null}
                         <DispatchJobCard job={job} />
-                        {hop && hop.driveMinutes !== null ? (
+                        {hop && (hop.driveMinutes !== null || hop.status === "overlap") ? (
                           <div
                             className={`mt-1 rounded-md px-2 py-1 text-center text-[11px] font-medium ${
-                              hop.status === "impossible"
+                              hop.status === "impossible" || hop.status === "overlap"
                                 ? "bg-red-100 text-red-800"
                                 : hop.status === "tight"
                                   ? "bg-amber-100 text-amber-800"
@@ -348,12 +435,14 @@ export default async function DispatchPage({ searchParams }: { searchParams: { d
                             }`}
                             title={driveSource === "routed" ? "Routed drive time (Google Maps)" : "Estimated from straight-line distance"}
                           >
-                            {hop.status === "impossible"
-                              ? `⛔ Can't make it — ~${hop.driveMinutes} min drive, ${hop.gapMinutes} min gap`
-                              : hop.status === "tight"
-                                ? `⚠️ 🚗 ~${hop.driveMinutes} min drive · only ${hop.gapMinutes - hop.driveMinutes} min slack`
-                                : `🚗 ~${hop.driveMinutes} min drive · ${hop.gapMinutes} min gap`}
-                            {driveSource === "estimate" ? " · est." : ""}
+                            {hop.status === "overlap"
+                              ? `⛔ Double-booked — next job starts ${-hop.gapMinutes} min before this one ends`
+                              : hop.status === "impossible"
+                                ? `⛔ Can't make it — ~${hop.driveMinutes} min drive, ${hop.gapMinutes} min gap`
+                                : hop.status === "tight"
+                                  ? `⚠️ 🚗 ~${hop.driveMinutes} min drive · only ${hop.gapMinutes - hop.driveMinutes!} min slack`
+                                  : `🚗 ~${hop.driveMinutes} min drive · ${hop.gapMinutes} min gap`}
+                            {driveSource === "estimate" && hop.status !== "overlap" ? " · est." : ""}
                           </div>
                         ) : null}
                       </div>

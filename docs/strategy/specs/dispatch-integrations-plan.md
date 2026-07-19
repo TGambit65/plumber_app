@@ -182,30 +182,40 @@ says the hop fits, and geocodes new properties on create.
 > the RLS coverage guard, and **seeding refuses to run** against a database
 > whose tenant tables aren't FORCE-RLS-protected (loud pre-flight in seed.ts).
 
-### Phase D4 — AI-assisted dispatch (weeks 6–10) — the option you asked about
-Philosophy: **the AI proposes, the dispatcher disposes** — same human-gated
-pattern as OrgMemory and the approvals queue. Never auto-assign.
+### Phase D4 — AI-assisted dispatch ✅ DONE (2026-07-19)
+Philosophy held: **the engine proposes, the dispatcher disposes** — nothing
+auto-applies, every decision audited. Shipped and verified end-to-end:
 
-1. **Smart assign** (per job): rank techs by a transparent score —
-   drive time from previous stop · cert/skill match (certifications +
-   pack job-type affinity) · current load · priority/SLA fit — shown as
-   *"Suggested: Jake (12 min away, W&M certified, 2 jobs today)"* with one-tap
-   accept.
-2. **Emergency insertion**: for an `EMERGENCY` booking, compute the
-   least-disruption slot across all techs ("Luis can absorb it — pushes one
-   NORMAL job 45 min; Jake would cascade two jobs").
-3. **Optimize my day** (per tech or whole board): one button reorders a day's
-   stops via the routing engine (VROOM self-hosted by default; Google Route
-   Optimization API as the premium traffic-aware option), presented as a
-   **diff** — current vs. proposed with minutes saved — applied only on accept.
-4. **Anomaly nudges**: quiet flags, not modals — "3 unassigned jobs are aging
-   past 48h", "Friday is overbooked for the crew size".
-5. All suggestions and accept/reject decisions **audited**, which doubles as
-   training signal for tuning the score weights per shop.
-
-Cost note: with VROOM/OSRM as default, AI routing has ~zero marginal cost;
-Google's optimizer becomes an opt-in whose per-use cost passes through at cost
-— consistent with the Plumb Zebra pilot economics.
+- **Pure suggestion engine** (`src/lib/dispatch/engine.ts`, fully unit-tested):
+  - `scoreTechsForJob` — ranks techs by cheapest feasible insertion slot:
+    added drive · load · transparent cert↔job-type match · feasibility, with
+    human-readable reasons + score parts.
+  - `emergencyInsertion` — least-disruption analysis ("absorbs it without
+    moving any job" vs "pushes 2 jobs by 45 min total").
+  - `optimizeDay` — nearest-neighbor + 2-opt over the drive matrix, retimed
+    schedule preserving durations, returned as before/after totals.
+- **Board suggestions** — unassigned jobs show "✨ Suggested: Jake · 3:30 PM"
+  (EMERGENCY jobs get "🚨 Least disruption" framing) with reasons + runner-up;
+  **Accept** runs the exact manual-assign pipeline (activity, tech notify,
+  confirmation SMS, calendar push) + `AI_SUGGESTION_ACCEPTED` audit;
+  **Dismiss** records `AI_SUGGESTION_REJECTED` — the training signal.
+- **Optimize-my-day diff** (`/dispatch/optimize`) — current vs proposed
+  schedules side by side, drive before/after, minutes saved, day-end change,
+  "moved" badges; Apply retimes + re-pushes calendar events + notifies the
+  tech + audits `AI_OPTIMIZE_APPLIED`; Cancel walks away. In-progress jobs are
+  never touched. Applying the retimed plan clears impossible back-to-backs.
+- **Anomaly nudges** — quiet amber strip: unassigned jobs aging past 48h,
+  overbooked techs. Advisory only.
+- D3 gap closed en route: same-tech **double-booking** hops now flagged
+  ("overlap" status) even without coordinates.
+- Engine drive times ride the D3 geo service (routed when Google Maps is
+  connected, labeled estimates otherwise). Built-in optimizer = zero marginal
+  cost; the premium Route Optimization API remains a future opt-in.
+Verified: 89 unit tests (scoring order, infeasibility, slot math, emergency
+ranking, 2-opt improvement + retiming, overlap detection) + 16-check
+Playwright e2e (suggestion + runner-up render, dismiss/accept audits, full
+accept pipeline incl. SMS attempt, optimize diff → apply → impossible hop
+cleared → tech notified, aging-job nudge).
 
 ### Phase D5 — FSM coexistence (when a prospect needs it)
 Live Jobber sync (import clients/jobs, webhook near-live updates) first;
