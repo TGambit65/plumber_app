@@ -1,9 +1,20 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { t, withTenant } from "@/db";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { approvePunchoutCart, rejectPunchoutCart, startPunchout } from "@/lib/actions/punchout";
 import { promoteEstimateToProject } from "@/lib/actions/projects";
+import {
+  duplicateEstimate,
+  expireEstimate,
+  moveEstimateOption,
+  removeEstimateOption,
+  reopenEstimate,
+  setEstimateClaim,
+  toggleLineItemOptional,
+  updateEstimateDetails,
+  updateEstimateOption,
+} from "@/lib/actions/money";
 import { readCartLines } from "@/lib/punchout/cxml";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
@@ -57,7 +68,7 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
   const session = await requireSession();
   if (!can(session.role, "estimates.create")) return <Forbidden />;
 
-  const { est, priceBook, supplierConn, punchouts } = await withTenant(session.organizationId, async (tx) => {
+  const { est, priceBook, supplierConn, punchouts, openClaims } = await withTenant(session.organizationId, async (tx) => {
     const est = await tx.query.estimates.findFirst({
       where: eq(t.estimates.id, params.id),
       with: {
@@ -91,7 +102,14 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
           with: { requestedBy: true },
         })
       : [];
-    return { est, priceBook, supplierConn, punchouts };
+    // M3: open claims for this customer (for the claim-link picker).
+    const openClaims = est
+      ? await tx.query.claims.findMany({
+          where: and(eq(t.claims.customerId, est.customerId), notInArray(t.claims.status, ["CLOSED", "DENIED"])),
+          orderBy: [t.claims.claimNumber],
+        })
+      : [];
+    return { est, priceBook, supplierConn, punchouts, openClaims };
   });
   if (!est) notFound();
 
@@ -162,9 +180,25 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
           ) : null}
         </div>
       ) : null}
-      {est.status === "DECLINED" ? (
-        <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          ❌ This estimate was declined. Check the lead timeline for the reason — it will resurface in the 30-day rehash queue.
+      {est.status === "DECLINED" || est.status === "EXPIRED" ? (
+        <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <span>
+            {est.status === "DECLINED"
+              ? "❌ This estimate was declined. Check the lead timeline for the reason — it will resurface in the 30-day rehash queue."
+              : "⌛ This estimate has expired — its follow-up sequence stopped."}
+          </span>
+          {/* M3: reopen a dead estimate for another round */}
+          <form action={reopenEstimate} className="ml-auto flex items-end gap-2">
+            <input type="hidden" name="estimateId" value={est.id} />
+            <div className="w-56">
+              <Field label="Reopen — reason (required)">
+                <Input name="reason" required placeholder="e.g. customer re-engaged" />
+              </Field>
+            </div>
+            <Button type="submit" size="sm" variant="secondary">
+              ♻️ Reopen as draft
+            </Button>
+          </form>
         </div>
       ) : null}
 
@@ -206,9 +240,70 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
                 </Button>
               </form>
             ) : null}
+            {/* M3: duplicate any estimate as a fresh draft */}
+            <form action={duplicateEstimate}>
+              <input type="hidden" name="estimateId" value={est.id} />
+              <Button type="submit" variant="secondary" title="Copies options + line items into a new DRAFT estimate">
+                📄 Duplicate
+              </Button>
+            </form>
+            {/* M3: manual expire for open estimates */}
+            {editable ? (
+              <form action={expireEstimate}>
+                <input type="hidden" name="estimateId" value={est.id} />
+                <Button type="submit" variant="ghost" title="Marks the estimate EXPIRED and stops its follow-up sequence">
+                  ⌛ Expire
+                </Button>
+              </form>
+            ) : null}
           </div>
         </CardBody>
       </Card>
+
+      {/* M3: estimate details — notes, financing, insurance claim link */}
+      {editable ? (
+        <Card className="mb-5">
+          <CardBody className="space-y-3">
+            <details className="rounded-lg border border-slate-200">
+              <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-700">✏️ Notes & financing</summary>
+              <form action={updateEstimateDetails} className="flex flex-wrap items-end gap-3 border-t border-slate-100 p-3">
+                <input type="hidden" name="estimateId" value={est.id} />
+                <div className="min-w-[260px] flex-1">
+                  <Field label="Notes (first line becomes the project name on promote)">
+                    <Input name="notes" defaultValue={est.notes ?? ""} placeholder="e.g. Water heater replacement options" />
+                  </Field>
+                </div>
+                <label className="flex items-center gap-2 pb-2 text-sm text-slate-700">
+                  <input type="checkbox" name="financingOffered" defaultChecked={est.financingOffered} className="h-4 w-4" />
+                  💳 Offer financing
+                </label>
+                <Button type="submit" size="sm" variant="secondary">
+                  Save
+                </Button>
+              </form>
+            </details>
+            <form action={setEstimateClaim} className="flex flex-wrap items-end gap-2">
+              <input type="hidden" name="estimateId" value={est.id} />
+              <div className="w-72">
+                <Field label="🛡️ Insurance claim (link the scope of loss)">
+                  <Select name="claimId" defaultValue={est.claimId ?? ""}>
+                    <option value="">Not an insurance job</option>
+                    {openClaims.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.claimNumber} · {statusLabel(c.status)}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+              <Button type="submit" size="sm" variant="secondary">
+                {est.claimId ? "Update link" : "Link claim"}
+              </Button>
+              {est.claimId ? <Badge tone="violet">🛡️ Claim-linked</Badge> : null}
+            </form>
+          </CardBody>
+        </Card>
+      ) : null}
 
       {/* Good / Better / Best presentation */}
       {options.length === 0 ? (
@@ -248,6 +343,44 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
                   action={<Badge tone={TIER_TONE[o.tier]}>{TIER_LABEL[o.tier]}</Badge>}
                 />
                 <CardBody className="flex flex-1 flex-col gap-2">
+                  {/* M3: option management — rename, retier, reorder, remove */}
+                  {editable ? (
+                    <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 pb-2">
+                      <form action={moveEstimateOption}>
+                        <input type="hidden" name="optionId" value={o.id} />
+                        <input type="hidden" name="dir" value="-1" />
+                        <button type="submit" title="Move left" className="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100">◀</button>
+                      </form>
+                      <form action={moveEstimateOption}>
+                        <input type="hidden" name="optionId" value={o.id} />
+                        <input type="hidden" name="dir" value="1" />
+                        <button type="submit" title="Move right" className="rounded px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100">▶</button>
+                      </form>
+                      <details className="min-w-0">
+                        <summary className="cursor-pointer rounded px-1.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-50">✏️ Edit option</summary>
+                        <form action={updateEstimateOption} className="mt-2 space-y-1.5 rounded-lg border border-slate-200 p-2">
+                          <input type="hidden" name="optionId" value={o.id} />
+                          <Input name="name" required defaultValue={o.name} aria-label="Option name" className="h-8 text-xs" />
+                          <Input name="description" defaultValue={o.description ?? ""} placeholder="Description" aria-label="Description" className="h-8 text-xs" />
+                          <div className="flex gap-1.5">
+                            <Select name="tier" defaultValue={o.tier} aria-label="Tier" className="h-8 flex-1 text-xs">
+                              <option value="GOOD">Good</option>
+                              <option value="BETTER">Better</option>
+                              <option value="BEST">Best</option>
+                              <option value="CUSTOM">Custom</option>
+                            </Select>
+                            <Button type="submit" size="sm" variant="secondary">Save</Button>
+                          </div>
+                        </form>
+                      </details>
+                      {!o.selected ? (
+                        <form action={removeEstimateOption} className="ml-auto">
+                          <input type="hidden" name="optionId" value={o.id} />
+                          <button type="submit" title="Remove this option" className="rounded px-1.5 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50">🗑 Remove</button>
+                        </form>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {/* Line items */}
                   {o.items.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
@@ -258,7 +391,10 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
                       {o.items.map((i) => (
                         <li key={i.id} className="py-2">
                           <div className="flex items-baseline justify-between gap-2 text-sm">
-                            <span className="text-slate-800">{i.description}</span>
+                            <span className={clsx("text-slate-800", i.optional && "text-slate-500")}>
+                              {i.description}
+                              {i.optional ? <Badge tone="amber" className="ml-1.5">Optional add-on</Badge> : null}
+                            </span>
                             <span className="whitespace-nowrap font-medium tabular-nums text-slate-900">
                               {money(Math.round(i.qty * i.unitPriceCents))}
                             </span>
@@ -289,6 +425,19 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
                                     className="rounded-md border border-slate-200 px-1.5 py-0.5 text-xs text-slate-600 hover:bg-slate-50"
                                   >
                                     ✓
+                                  </button>
+                                </form>
+                                <form action={toggleLineItemOptional}>
+                                  <input type="hidden" name="itemId" value={i.id} />
+                                  <button
+                                    type="submit"
+                                    title={i.optional ? "Include in the base total" : "Mark as an optional add-on (excluded from the base total)"}
+                                    className={clsx(
+                                      "rounded-md px-1.5 py-0.5 text-xs",
+                                      i.optional ? "bg-amber-100 text-amber-700" : "text-slate-500 hover:bg-slate-100"
+                                    )}
+                                  >
+                                    opt
                                   </button>
                                 </form>
                                 <form action={removeLineItem}>

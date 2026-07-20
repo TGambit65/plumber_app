@@ -22,6 +22,8 @@ import {
 } from "@/components/ui";
 import { money, fmtDate } from "@/lib/format";
 import { rejectCommission, setCommissionStatus } from "@/lib/actions/shared";
+import { bulkCommission, createCommissionEntry, unapproveCommission } from "@/lib/actions/money";
+import { Field, Input } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -97,6 +99,72 @@ export default async function CommissionsPage({
         <Stat label={`Paid — ${currentPeriod}`} value={money(paidThisPeriod)} tone="good" />
       </div>
 
+      {/* M3: the payroll run — bulk approve / bulk pay by period + manual entries */}
+      <Card>
+        <CardHeader title="🏦 Payroll run" subtitle="Approve or pay a whole period in one click — no more row-by-row clicking" />
+        <CardBody className="flex flex-wrap items-end gap-6">
+          <form action={bulkCommission} className="flex items-end gap-2">
+            <input type="hidden" name="mode" value="approve" />
+            <div className="w-36">
+              <Field label="Period">
+                <Input name="period" defaultValue={currentPeriod} pattern="\d{4}-\d{2}" required />
+              </Field>
+            </div>
+            <Button type="submit" size="sm" variant="success">
+              ✓ Approve all pending
+            </Button>
+          </form>
+          <form action={bulkCommission} className="flex items-end gap-2">
+            <input type="hidden" name="mode" value="pay" />
+            <div className="w-36">
+              <Field label="Period">
+                <Input name="period" defaultValue={currentPeriod} pattern="\d{4}-\d{2}" required />
+              </Field>
+            </div>
+            <Button type="submit" size="sm" variant="secondary">
+              💵 Mark all approved paid
+            </Button>
+          </form>
+          <details className="ml-auto">
+            <summary className="cursor-pointer text-sm font-medium text-blue-600">＋ Manual entry / adjustment</summary>
+            <form action={createCommissionEntry} className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 p-3">
+              <div className="w-44">
+                <Field label="Who">
+                  <Select name="userId" required defaultValue="">
+                    <option value="" disabled>
+                      Choose user…
+                    </option>
+                    {users.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.name}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+              <div className="min-w-[200px] flex-1">
+                <Field label="Description">
+                  <Input name="description" required placeholder="e.g. Q3 review spiff / correction" />
+                </Field>
+              </div>
+              <div className="w-28">
+                <Field label="Amount ($)">
+                  <Input name="amount" required inputMode="decimal" placeholder="150" />
+                </Field>
+              </div>
+              <div className="w-32">
+                <Field label="Period">
+                  <Input name="period" defaultValue={currentPeriod} pattern="\d{4}-\d{2}" />
+                </Field>
+              </div>
+              <Button type="submit" size="sm">
+                Add entry
+              </Button>
+            </form>
+          </details>
+        </CardBody>
+      </Card>
+
       <Card>
         <CardHeader
           title="Entries"
@@ -154,13 +222,26 @@ export default async function CommissionsPage({
                           </form>
                         ) : null}
                         {e.status === "APPROVED" ? (
-                          <form action={setCommissionStatus}>
-                            <input type="hidden" name="id" value={e.id} />
-                            <input type="hidden" name="status" value="PAID" />
-                            <Button type="submit" size="sm" variant="secondary">
-                              Mark paid
-                            </Button>
-                          </form>
+                          <>
+                            <form action={setCommissionStatus}>
+                              <input type="hidden" name="id" value={e.id} />
+                              <input type="hidden" name="status" value="PAID" />
+                              <Button type="submit" size="sm" variant="secondary">
+                                Mark paid
+                              </Button>
+                            </form>
+                            {/* M3: walk an approval back with a reason */}
+                            <details>
+                              <summary className="cursor-pointer rounded px-1.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50">↩ Un-approve…</summary>
+                              <form action={unapproveCommission} className="mt-1.5 flex items-end gap-1.5">
+                                <input type="hidden" name="entryId" value={e.id} />
+                                <Input name="reason" required placeholder="reason" aria-label="Un-approve reason" className="h-8 w-36 text-xs" />
+                                <Button type="submit" size="sm" variant="secondary">
+                                  Go
+                                </Button>
+                              </form>
+                            </details>
+                          </>
                         ) : null}
                         {e.status !== "PAID" ? (
                           <form action={rejectCommission}>

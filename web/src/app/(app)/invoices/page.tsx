@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { t, withTenant } from "@/db";
-import { and, eq, lt } from "drizzle-orm";
+import { and, asc, eq, isNull, lt } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { markInvoiceSent, recordPayment, voidInvoice } from "@/lib/actions/office";
+import { createStandaloneInvoice } from "@/lib/actions/money";
 import {
   Badge,
   Button,
@@ -36,17 +37,21 @@ export default async function InvoicesPage({ searchParams }: { searchParams: { s
     ? (searchParams.status as InvoiceStatus)
     : undefined;
 
-  const invoices = await withTenant(session.organizationId, async (tx) => {
+  const { invoices, customers } = await withTenant(session.organizationId, async (tx) => {
     // Cheap sweep: mark any SENT invoice past due as OVERDUE before querying.
     await tx
       .update(t.invoices)
       .set({ status: "OVERDUE" })
       .where(and(eq(t.invoices.status, "SENT"), lt(t.invoices.dueAt, new Date())));
 
-    return tx.query.invoices.findMany({
-      with: { customer: true, job: true, project: true, items: true, payments: true },
-      orderBy: (i, { desc: d }) => [d(i.createdAt)],
-    });
+    const [invoices, customers] = await Promise.all([
+      tx.query.invoices.findMany({
+        with: { customer: true, job: true, project: true, items: true, payments: true },
+        orderBy: (i, { desc: d }) => [d(i.createdAt)],
+      }),
+      tx.query.customers.findMany({ where: isNull(t.customers.archivedAt), orderBy: asc(t.customers.name) }),
+    ]);
+    return { invoices, customers };
   });
 
   const computed = invoices.map((inv) => {
@@ -89,6 +94,35 @@ export default async function InvoicesPage({ searchParams }: { searchParams: { s
         <Stat label="Collected rate" value={`${collectedRate}%`} hint="of billed total" />
       </div>
 
+      {/* M3: standalone invoice — not only via job closeout */}
+      {can(session.role, "invoices.create") ? (
+        <Card className="mb-4">
+          <div className="p-4">
+            <details>
+              <summary className="cursor-pointer text-sm font-medium text-blue-600">＋ New invoice (standalone)</summary>
+              <form action={createStandaloneInvoice} className="mt-3 flex flex-wrap items-end gap-2">
+                <div className="w-64">
+                  <Select name="customerId" required defaultValue="" aria-label="Customer">
+                    <option value="" disabled>
+                      Select customer…
+                    </option>
+                    {customers.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <Button type="submit" size="sm">
+                  Create draft
+                </Button>
+                <span className="text-xs text-slate-400">Add lines on the invoice page, then mark it sent.</span>
+              </form>
+            </details>
+          </div>
+        </Card>
+      ) : null}
+
       <div className="mb-4 flex flex-wrap items-center gap-1.5">
         <Link href="/invoices" className={buttonClass(statusFilter ? "ghost" : "secondary", "sm")}>
           All
@@ -110,7 +144,9 @@ export default async function InvoicesPage({ searchParams }: { searchParams: { s
               {rows.map(({ inv, total, paid, balance }) => (
                 <TRow key={inv.id} className={inv.status === "OVERDUE" ? "bg-red-50/60" : undefined}>
                   <TCell>
-                    <span className="font-medium">{inv.number}</span>
+                    <Link href={`/invoices/${inv.id}`} className="font-medium text-blue-700 hover:underline">
+                      {inv.number}
+                    </Link>
                   </TCell>
                   <TCell>
                     <Link href={`/customers/${inv.customerId}`} className="text-blue-700 hover:underline">
@@ -154,6 +190,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: { s
                             className="h-8 w-24 text-xs"
                             required
                           />
+                          <Input name="reference" placeholder="ref #" aria-label="Payment reference" className="h-8 w-20 text-xs" />
                           <Select name="method" defaultValue="CARD" aria-label="Payment method" className="h-8 w-24 text-xs">
                             <option value="CARD">Card</option>
                             <option value="ACH">ACH</option>

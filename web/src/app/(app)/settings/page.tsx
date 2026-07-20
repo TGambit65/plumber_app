@@ -33,6 +33,7 @@ import {
   syncFsmNow,
   testConnector,
 } from "@/lib/actions/connectors";
+import { deleteCommissionRule, updateCommissionRule } from "@/lib/actions/money";
 import { configureSso, disableSso } from "@/lib/actions/sso";
 import { enablePack, disablePack, provisionPackTemplates } from "@/lib/actions/packs";
 import { packCatalog } from "@/lib/trade-packs";
@@ -815,13 +816,60 @@ async function CommissionsTab({ organizationId }: { organizationId: string }) {
                     <TCell>{r.category ?? "—"}</TCell>
                     <TCell>{r.active ? <Badge tone="green">Active</Badge> : <Badge tone="slate">Inactive</Badge>}</TCell>
                     <TCell>
-                      <form action={toggleCommissionRule}>
-                        <input type="hidden" name="id" value={r.id} />
-                        <input type="hidden" name="next" value={String(!r.active)} />
-                        <Button type="submit" size="sm" variant="secondary">
-                          {r.active ? "Disable" : "Enable"}
-                        </Button>
-                      </form>
+                      <div className="flex flex-wrap items-start gap-1.5">
+                        <form action={toggleCommissionRule}>
+                          <input type="hidden" name="id" value={r.id} />
+                          <input type="hidden" name="next" value={String(!r.active)} />
+                          <Button type="submit" size="sm" variant="secondary">
+                            {r.active ? "Disable" : "Enable"}
+                          </Button>
+                        </form>
+                        {/* M3: a wrong rate is no longer stuck forever */}
+                        <details>
+                          <summary className="cursor-pointer rounded px-1.5 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50">✏️ Edit</summary>
+                          <form action={updateCommissionRule} className="mt-2 grid w-64 gap-1.5 rounded-lg border border-slate-200 p-2.5">
+                            <input type="hidden" name="ruleId" value={r.id} />
+                            <Input name="name" required defaultValue={r.name} aria-label="Rule name" className="h-8 text-xs" />
+                            <div className="flex gap-1.5">
+                              <Select name="kind" defaultValue={r.kind} aria-label="Kind" className="h-8 flex-1 text-xs">
+                                <option value="PERCENT_REVENUE">% of revenue</option>
+                                <option value="PERCENT_MARGIN">% of margin</option>
+                                <option value="SPIFF">Spiff (flat $)</option>
+                              </Select>
+                              <Input
+                                name="rate"
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                required
+                                defaultValue={r.kind === "SPIFF" ? (r.rate / 100).toString() : r.rate.toString()}
+                                aria-label="Rate"
+                                className="h-8 w-20 text-xs"
+                              />
+                            </div>
+                            <div className="flex gap-1.5">
+                              <Select name="role" defaultValue={r.role ?? ""} aria-label="Role" className="h-8 flex-1 text-xs">
+                                <option value="">Any role</option>
+                                {(Object.keys(ROLE_LABELS) as Role[]).map((role) => (
+                                  <option key={role} value={role}>
+                                    {ROLE_LABELS[role]}
+                                  </option>
+                                ))}
+                              </Select>
+                              <Input name="category" defaultValue={r.category ?? ""} placeholder="Category" aria-label="Category" className="h-8 w-24 text-xs" />
+                            </div>
+                            <Button type="submit" size="sm" variant="secondary">
+                              Save rule
+                            </Button>
+                          </form>
+                        </details>
+                        <form action={deleteCommissionRule}>
+                          <input type="hidden" name="ruleId" value={r.id} />
+                          <button type="submit" title="Delete this rule (existing entries are untouched)" className="rounded px-1.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50">
+                            🗑
+                          </button>
+                        </form>
+                      </div>
                     </TCell>
                   </TRow>
                 ))}

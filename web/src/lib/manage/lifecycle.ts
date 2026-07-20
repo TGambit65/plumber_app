@@ -118,6 +118,46 @@ export function changeOrderEditBlocker(status: ChangeOrderStatus): string | null
   return null;
 }
 
+// ── Money: estimates, invoices, commissions (M3) ─────────────────────────────
+
+export type EstimateStatus = "DRAFT" | "SENT" | "VIEWED" | "APPROVED" | "DECLINED" | "EXPIRED";
+
+/** Manual expire is for open estimates; decided ones keep their outcome. */
+export function estimateExpireBlocker(status: EstimateStatus): string | null {
+  if (status === "DRAFT" || status === "SENT" || status === "VIEWED") return null;
+  return `${status} estimates can't be expired.`;
+}
+
+/** Reopen brings a dead estimate back to DRAFT for another round. */
+export function estimateReopenBlocker(status: EstimateStatus): string | null {
+  if (status === "DECLINED" || status === "EXPIRED") return null;
+  return "Only declined or expired estimates can be reopened.";
+}
+
+export type InvoiceStatus = "DRAFT" | "SENT" | "PARTIAL" | "PAID" | "OVERDUE" | "VOID";
+
+/** Money is immutable once real: lines/dates change only while DRAFT. */
+export function invoiceEditBlocker(status: InvoiceStatus): string | null {
+  if (status === "DRAFT") return null;
+  return `A ${status} invoice can't be edited — void it and duplicate as a new draft instead.`;
+}
+
+/** Void-and-duplicate is the correction path for issued, unpaid invoices. */
+export function invoiceVoidBlocker(status: InvoiceStatus): string | null {
+  if (status === "PAID") return "Paid invoices can't be voided.";
+  if (status === "VOID") return "Invoice is already void.";
+  return null;
+}
+
+export type CommissionStatus = "PENDING" | "APPROVED" | "PAID";
+
+/** Un-approve walks APPROVED back to PENDING; PAID is immutable. */
+export function commissionUnapproveBlocker(status: CommissionStatus): string | null {
+  if (status === "APPROVED") return null;
+  if (status === "PAID") return "Paid commissions are immutable — adjust with a new manual entry.";
+  return "Only approved entries can be un-approved.";
+}
+
 // ── Leads ────────────────────────────────────────────────────────────────────
 
 export type LeadStage = "NEW" | "CONTACTED" | "ESTIMATE_SCHEDULED" | "ESTIMATE_SENT" | "FOLLOW_UP" | "WON" | "LOST";

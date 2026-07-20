@@ -1,14 +1,20 @@
 import Link from "next/link";
 import { t, withTenant } from "@/db";
-import { desc } from "drizzle-orm";
+import { asc, desc, isNull } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { lineTotal, money, timeAgo, fmtDate } from "@/lib/format";
+import { createStandaloneEstimate, sweepExpiredEstimates } from "@/lib/actions/money";
 import {
   Badge,
+  Button,
   Card,
+  CardBody,
   EmptyState,
+  Field,
+  Input,
   PageHeader,
+  Select,
   Table,
   TCell,
   THead,
@@ -24,16 +30,26 @@ export default async function EstimatesPage() {
   const session = await requireSession();
   if (!can(session.role, "estimates.create")) return <Forbidden />;
 
-  const estimates = await withTenant(session.organizationId, (tx) =>
-    tx.query.estimates.findMany({
-      with: {
-        customer: true,
-        createdBy: true,
-        options: { with: { items: true } },
-        followUps: true,
-      },
-      orderBy: [desc(t.estimates.createdAt)],
-    })
+  // M3: lazy auto-expire — SENT/VIEWED past their 30-day shelf life flip to EXPIRED.
+  await sweepExpiredEstimates(session.organizationId);
+
+  const [estimates, customers] = await withTenant(session.organizationId, (tx) =>
+    Promise.all([
+      tx.query.estimates.findMany({
+        with: {
+          customer: true,
+          createdBy: true,
+          options: { with: { items: true } },
+          followUps: true,
+        },
+        orderBy: [desc(t.estimates.createdAt)],
+      }),
+      tx.query.customers.findMany({
+        where: isNull(t.customers.archivedAt),
+        with: { properties: { where: isNull(t.properties.archivedAt) } },
+        orderBy: asc(t.customers.name),
+      }),
+    ])
   );
 
   const openValue = estimates
@@ -49,6 +65,47 @@ export default async function EstimatesPage() {
         title="📝 Estimates"
         subtitle={`${estimates.length} proposals · ${money(openValue)} awaiting decision`}
       />
+
+      {/* M3: standalone estimate — no lead required */}
+      <Card className="mb-4">
+        <CardBody>
+          <details>
+            <summary className="cursor-pointer text-sm font-medium text-blue-600">＋ New estimate (no lead required)</summary>
+            <form action={createStandaloneEstimate} className="mt-3 grid gap-3 md:grid-cols-3">
+              <Field label="Customer">
+                <Select name="customerId" required defaultValue="">
+                  <option value="" disabled>
+                    Select customer…
+                  </option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Property (optional)">
+                <Select name="propertyId" defaultValue="">
+                  <option value="">—</option>
+                  {customers.flatMap((c) =>
+                    c.properties.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {c.name} — {p.address}
+                      </option>
+                    ))
+                  )}
+                </Select>
+              </Field>
+              <Field label="What's it for?">
+                <Input name="notes" placeholder="e.g. Water heater replacement options" />
+              </Field>
+              <div>
+                <Button type="submit">Create draft estimate</Button>
+              </div>
+            </form>
+          </details>
+        </CardBody>
+      </Card>
 
       <Card>
         {estimates.length === 0 ? (

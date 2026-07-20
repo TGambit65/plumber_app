@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { lineTotal } from "@/lib/format";
 import {
   changeOrderEditBlocker,
+  commissionUnapproveBlocker,
+  estimateExpireBlocker,
+  estimateReopenBlocker,
+  invoiceEditBlocker,
+  invoiceVoidBlocker,
   customerArchiveBlocker,
   jobArchiveBlocker,
   jobCancelBlocker,
@@ -151,6 +157,61 @@ describe("changeOrderEditBlocker (M2)", () => {
     expect(changeOrderEditBlocker("PENDING_SIGNATURE")).toBeNull();
     expect(changeOrderEditBlocker("APPROVED")).toMatch(/contract/);
     expect(changeOrderEditBlocker("REJECTED")).toMatch(/record/);
+  });
+});
+
+describe("estimate lifecycle (M3)", () => {
+  it("manual expire only touches open estimates", () => {
+    expect(estimateExpireBlocker("DRAFT")).toBeNull();
+    expect(estimateExpireBlocker("SENT")).toBeNull();
+    expect(estimateExpireBlocker("VIEWED")).toBeNull();
+    expect(estimateExpireBlocker("APPROVED")).toMatch(/can't be expired/);
+    expect(estimateExpireBlocker("DECLINED")).toMatch(/can't be expired/);
+  });
+  it("reopen only revives dead estimates", () => {
+    expect(estimateReopenBlocker("DECLINED")).toBeNull();
+    expect(estimateReopenBlocker("EXPIRED")).toBeNull();
+    expect(estimateReopenBlocker("DRAFT")).toMatch(/declined or expired/);
+    expect(estimateReopenBlocker("APPROVED")).toMatch(/declined or expired/);
+  });
+});
+
+describe("invoice immutability (M3)", () => {
+  it("lines/dates edit only while DRAFT", () => {
+    expect(invoiceEditBlocker("DRAFT")).toBeNull();
+    for (const s of ["SENT", "PARTIAL", "PAID", "OVERDUE", "VOID"] as const) {
+      expect(invoiceEditBlocker(s)).toMatch(/void it and duplicate/);
+    }
+  });
+  it("void allowed for anything unpaid; PAID and VOID are terminal", () => {
+    expect(invoiceVoidBlocker("DRAFT")).toBeNull();
+    expect(invoiceVoidBlocker("SENT")).toBeNull();
+    expect(invoiceVoidBlocker("OVERDUE")).toBeNull();
+    expect(invoiceVoidBlocker("PAID")).toMatch(/Paid/);
+    expect(invoiceVoidBlocker("VOID")).toMatch(/already/);
+  });
+});
+
+describe("commission un-approve (M3)", () => {
+  it("only APPROVED walks back; PAID is immutable", () => {
+    expect(commissionUnapproveBlocker("APPROVED")).toBeNull();
+    expect(commissionUnapproveBlocker("PAID")).toMatch(/immutable/);
+    expect(commissionUnapproveBlocker("PENDING")).toMatch(/approved/i);
+  });
+});
+
+describe("lineTotal optional add-ons (M3)", () => {
+  it("optional lines are excluded from the base total", () => {
+    expect(
+      lineTotal([
+        { qty: 1, unitPriceCents: 10000 },
+        { qty: 2, unitPriceCents: 5000, optional: true },
+        { qty: 1, unitPriceCents: 2500, optional: false },
+      ])
+    ).toBe(12500);
+  });
+  it("invoice lines without the flag are unaffected", () => {
+    expect(lineTotal([{ qty: 2, unitPriceCents: 5000 }])).toBe(10000);
   });
 });
 

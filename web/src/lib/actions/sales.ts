@@ -676,7 +676,9 @@ export async function reallySendEstimate(organizationId: string, estimateId: str
     });
     if (!est) throw new Error("Estimate not found");
     const now = new Date();
-    await tx.update(t.estimates).set({ status: "SENT", sentAt: now }).where(eq(t.estimates.id, estimateId));
+    // M3: sent estimates carry a 30-day shelf life — past it they auto-expire.
+    const expiresAt = new Date(now.getTime() + 30 * 86_400_000);
+    await tx.update(t.estimates).set({ status: "SENT", sentAt: now, expiresAt }).where(eq(t.estimates.id, estimateId));
 
     // Default-on follow-up automation: 7 touches over 7 days — only if not present.
     const existingFollowUps = await tx.query.followUps.findMany({

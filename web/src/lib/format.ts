@@ -51,6 +51,7 @@ export function initials(name: string): string {
 }
 
 /** Sum of qty*unitPrice for line-item-like rows */
-export function lineTotal(items: { qty: number; unitPriceCents: number }[]): number {
-  return items.reduce((sum, i) => sum + Math.round(i.qty * i.unitPriceCents), 0);
+export function lineTotal(items: { qty: number; unitPriceCents: number; optional?: boolean }[]): number {
+  // M3: optional add-on lines are priced separately — excluded from the base total.
+  return items.reduce((sum, i) => (i.optional ? sum : sum + Math.round(i.qty * i.unitPriceCents)), 0);
 }

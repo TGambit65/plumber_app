@@ -1,6 +1,6 @@
 # Management Functionality Plan — full CRUD/lifecycle across every side-menu screen
 
-**Status: IN PROGRESS** — M1 ✅ · M2 ✅ DONE · M3–M6 pending.
+**Status: IN PROGRESS** — M1 ✅ · M2 ✅ · M3 ✅ DONE · M4–M6 pending.
 
 ## 1. The problem
 
@@ -144,7 +144,23 @@ enum reachability, and archive round-trip.
 - Invoices: milestone invoicing exists; add project-level ad-hoc invoice
   (feeds M3's standalone invoice creation).
 
-### Phase M3 — Documents & money: estimates, invoices, commissions
+### Phase M3 — Documents & money: estimates, invoices, commissions ✅ DONE
+
+Shipped via `src/lib/actions/money.ts` (20 actions) + M3 guards in
+`manage/lifecycle.ts` (expire/reopen states, DRAFT-only invoice edits,
+void blockers, PAID commission immutability). Estimates: standalone create,
+option rename/retier/reorder/remove (selected option protected), notes +
+financing editing, line-item `optional` flag (excluded from base totals via
+`lineTotal`), manual EXPIRED + 30-day auto-expire sweep (`expires_at` set on
+send) + reopen-with-reason, claim linking from the builder, duplicate-as-
+DRAFT. Invoices: new `/invoices/[id]` detail page (lines, payments with
+references, audit trail), standalone create, DRAFT line/date editing,
+approval-gated payment reminders, one-click void & duplicate. Commissions:
+rule edit + delete, bulk approve/pay by period, un-approve with reason,
+manual entries (sourceType MANUAL, notify the earner).
+Verified: 7 new unit tests (140 total) + 34-check Playwright e2e
+(`verify-m3.mjs`) with DB + audit assertions, incl. auto-expire on page
+load, optional-line total math, reminder queue, and PAID immutability.
 
 **Estimates**
 - Standalone create from the Estimates list or a customer page (no lead

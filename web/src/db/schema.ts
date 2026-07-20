@@ -211,6 +211,8 @@ export const estimates = pgTable("estimates", {
   viewCount: integer("view_count").notNull().default(0),
   lastViewedAt: timestamp("last_viewed_at", { withTimezone: true }),
   sentAt: timestamp("sent_at", { withTimezone: true }),
+  /** M3: set on send (+30d). SENT/VIEWED estimates past this auto-expire. */
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
   signedName: text("signed_name"),
   signedAt: timestamp("signed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

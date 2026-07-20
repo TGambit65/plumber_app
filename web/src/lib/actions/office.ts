@@ -364,8 +364,9 @@ export async function recordPayment(formData: FormData) {
   const method = pick(str(formData, "method"), PAYMENT_METHODS, "CARD");
   if (!invoiceId || !Number.isFinite(amountCents) || amountCents <= 0) return;
 
+  const reference = str(formData, "reference");
   const inv = await withTenant(session.organizationId, async (tx) => {
-    await tx.insert(t.payments).values({ invoiceId, amountCents, method });
+    await tx.insert(t.payments).values({ invoiceId, amountCents, method, reference: reference || null });
 
     const found = await tx.query.invoices.findFirst({
       where: eq(t.invoices.id, invoiceId),
