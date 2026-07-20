@@ -14,7 +14,7 @@
 
 // ── Capabilities ─────────────────────────────────────────────────────────────
 
-export type ConnectorCapability = "crm" | "accounting" | "jobs" | "messaging" | "pm" | "procurement" | "calendar" | "geo";
+export type ConnectorCapability = "crm" | "accounting" | "jobs" | "messaging" | "pm" | "procurement" | "calendar" | "geo" | "payments";
 
 export const CAPABILITY_LABELS: Record<ConnectorCapability, string> = {
   crm: "CRM",
@@ -25,6 +25,7 @@ export const CAPABILITY_LABELS: Record<ConnectorCapability, string> = {
   procurement: "Suppliers / procurement",
   calendar: "Calendars",
   geo: "Maps & routing",
+  payments: "Online payments",
 };
 
 // ── Descriptor (drives the integrations hub UI) ──────────────────────────────
@@ -233,6 +234,23 @@ export interface CalendarOps {
   listBusy(timeMin: Date, timeMax: Date): Promise<PullResult<BusyWindow>>;
 }
 
+// Payments (C1): hosted checkout for public invoice links.
+
+export interface PaymentsOps {
+  /** Create a hosted checkout session; the customer pays on the provider page
+   *  and the provider webhooks us the result. `reference` is OUR invoice id
+   *  (round-trips via client_reference_id). */
+  createCheckoutSession(params: {
+    amountCents: number;
+    currency?: string;
+    description: string;
+    successUrl: string;
+    cancelUrl: string;
+    reference: string;
+    customerEmail?: string;
+  }): Promise<{ ok: boolean; degraded: boolean; url?: string; sessionId?: string; message?: string }>;
+}
+
 /** Supplier punchout: start a cXML catalog session; the cart returns via BrowserFormPost. */
 export interface ProcurementOps {
   setupPunchout(params: {
@@ -260,6 +278,7 @@ export interface Connector {
   procurement?: (config: ConnectorConfig) => ProcurementOps;
   calendar?: (config: ConnectorConfig) => CalendarOps;
   geo?: (config: ConnectorConfig) => GeoOps;
+  payments?: (config: ConnectorConfig) => PaymentsOps;
 }
 
 /** Shared helper: which required config fields are missing? */

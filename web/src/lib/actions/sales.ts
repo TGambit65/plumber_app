@@ -3,12 +3,13 @@
 /* SALES/PM module server actions: leads, pipeline, follow-ups, estimates, projects. */
 
 import { revalidatePath } from "next/cache";
+import { randomBytes } from "crypto";
 import { redirect } from "next/navigation";
 import { t, withTenant, type TenantDb } from "@/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can, type Permission } from "@/lib/permissions";
-import { audit, logActivity, notify } from "@/lib/actions/helpers";
+import { audit, auditOrg, logActivity, logActivityOrg, notify, notifyOrg } from "@/lib/actions/helpers";
 import { lineTotal, money } from "@/lib/format";
 
 // ── Internal helpers (not exported — "use server" files may only export async fns) ──
@@ -95,7 +96,9 @@ function revalidateSales(leadId?: string, estimateId?: string) {
 }
 
 /** Core stage transition shared by lead detail buttons & pipeline board.
- *  Must run inside the caller's withTenant transaction. */
+ *  Must run inside the caller's withTenant transaction. Writes its activity
+ *  row through the SAME transaction (not logActivity) so it also works on the
+ *  sessionless public-proposal path (C1). */
 async function applyLeadStage(tx: TenantDb, leadId: string, stage: Stage, userId: string, lostReason?: string) {
   const lead = await tx.query.leads.findFirst({ where: eq(t.leads.id, leadId) });
   if (!lead) throw new Error("Lead not found");
@@ -104,7 +107,7 @@ async function applyLeadStage(tx: TenantDb, leadId: string, stage: Stage, userId
   if (stage === "CONTACTED" && !lead.firstTouchAt) patch.firstTouchAt = now;
   if (stage === "LOST") patch.lostReason = lostReason || lead.lostReason || "No reason recorded";
   await tx.update(t.leads).set(patch).where(eq(t.leads.id, leadId));
-  await logActivity({
+  await tx.insert(t.activities).values({
     kind: "STATUS",
     body:
       stage === "LOST"
@@ -700,7 +703,12 @@ export async function reallySendEstimate(organizationId: string, estimateId: str
     const now = new Date();
     // M3: sent estimates carry a 30-day shelf life — past it they auto-expire.
     const expiresAt = new Date(now.getTime() + 30 * 86_400_000);
-    await tx.update(t.estimates).set({ status: "SENT", sentAt: now, expiresAt }).where(eq(t.estimates.id, estimateId));
+    // C1: mint the public proposal token on first send (idempotent).
+    const publicToken = est.publicToken ?? randomBytes(24).toString("hex");
+    await tx
+      .update(t.estimates)
+      .set({ status: "SENT", sentAt: now, expiresAt, publicToken })
+      .where(eq(t.estimates.id, estimateId));
 
     // Default-on follow-up automation: 7 touches over 7 days — only if not present.
     const existingFollowUps = await tx.query.followUps.findMany({
@@ -719,7 +727,7 @@ export async function reallySendEstimate(organizationId: string, estimateId: str
     }
 
     if (est.leadId) await applyLeadStage(tx, est.leadId, "ESTIMATE_SENT", actorUserId);
-    return est;
+    return { ...est, publicToken };
   });
 
   await logActivity({
@@ -776,8 +784,26 @@ export async function approveEstimate(formData: FormData) {
   const signedName = str(formData, "signedName");
   if (!optionId) throw new Error("Select an option to approve");
   if (!signedName) throw new Error("Signed name is required for e-signature");
+  await approveEstimateCore(session.organizationId, estimateId, optionId, signedName, {
+    userId: session.userId,
+    label: session.name,
+  });
+}
 
-  const { est, option, total, commissionCents } = await withTenant(session.organizationId, async (tx) => {
+/**
+ * C1: the FULL approval pipeline, callable with OR without a session — the
+ * internal builder and the public proposal page (customer self-signing from
+ * their phone) run the exact same code: option selection, e-sign, 5%
+ * commission for the creator, sold-job creation, follow-up stop, lead WON.
+ */
+export async function approveEstimateCore(
+  organizationId: string,
+  estimateId: string,
+  optionId: string,
+  signedName: string,
+  actor: { userId: string | null; label: string }
+) {
+  const { est, option, total, commissionCents } = await withTenant(organizationId, async (tx) => {
     const est = await tx.query.estimates.findFirst({
       where: eq(t.estimates.id, estimateId),
       with: { options: { with: { items: true } }, customer: { with: { properties: true } } },
@@ -834,29 +860,31 @@ export async function approveEstimate(formData: FormData) {
       .update(t.followUps)
       .set({ status: "SKIPPED" })
       .where(and(eq(t.followUps.estimateId, estimateId), eq(t.followUps.status, "PENDING")));
-    if (est.leadId) await applyLeadStage(tx, est.leadId, "WON", session.userId);
+    if (est.leadId) await applyLeadStage(tx, est.leadId, "WON", actor.userId ?? est.createdById);
 
     return { est, option, total, commissionCents };
   });
 
-  await logActivity({
+  await logActivityOrg(organizationId, {
     kind: "STATUS",
-    body: `Estimate ${est.number} approved & e-signed by ${signedName} — "${option.name}" for ${money(total)}`,
-    userId: session.userId,
+    body: `Estimate ${est.number} approved & e-signed by ${signedName} — "${option.name}" for ${money(total)}${actor.userId ? "" : " (customer self-signed via proposal link)"}`,
+    userId: actor.userId ?? undefined,
     customerId: est.customerId,
     leadId: est.leadId ?? undefined,
   });
-  await notify(
+  await notifyOrg(
+    organizationId,
     est.createdById,
     `🎉 ${est.number} approved — ${money(total)}`,
-    `${signedName} signed for "${option.name}". Commission ${money(commissionCents)} pending approval.`,
+    `${signedName} signed for "${option.name}"${actor.userId ? "" : " on the proposal page"}. Commission ${money(commissionCents)} pending approval.`,
     `/estimates/${estimateId}`
   );
-  await audit(session.userId, "ESTIMATE_APPROVED", "Estimate", est.id, {
+  await auditOrg(organizationId, actor.userId, "ESTIMATE_APPROVED", "Estimate", est.id, {
     option: option.name,
     totalCents: total,
     commissionCents,
     signedName,
+    via: actor.userId ? "internal" : "public_proposal",
   });
   revalidateSales(est.leadId ?? undefined, estimateId);
 }

@@ -213,6 +213,8 @@ export const estimates = pgTable("estimates", {
   sentAt: timestamp("sent_at", { withTimezone: true }),
   /** M3: set on send (+30d). SENT/VIEWED estimates past this auto-expire. */
   expiresAt: timestamp("expires_at", { withTimezone: true }),
+  /** C1: unguessable capability for the public proposal page (/proposal/[token]). */
+  publicToken: text("public_token").unique(),
   signedName: text("signed_name"),
   signedAt: timestamp("signed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -399,6 +401,8 @@ export const invoices = pgTable("invoices", {
   dueAt: timestamp("due_at", { withTimezone: true }),
   signedName: text("signed_name"),
   signedAt: timestamp("signed_at", { withTimezone: true }),
+  /** C1: unguessable capability for the public pay page (/pay/[token]). */
+  publicToken: text("public_token").unique(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

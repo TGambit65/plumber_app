@@ -111,3 +111,33 @@ $fn$;
 
 REVOKE ALL ON FUNCTION calendar_feed_by_token(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION calendar_feed_by_token(text) TO plumber;
+
+-- C1: public proposal page — the customer opens their estimate with NO login;
+-- the unguessable token is the capability. ONLY global read of estimates; the
+-- page immediately re-enters withTenant(org) for everything else.
+CREATE OR REPLACE FUNCTION estimate_by_public_token(p_token text)
+RETURNS TABLE (id text, organization_id text)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $fn$
+  SELECT id, organization_id FROM estimates
+  WHERE public_token = p_token LIMIT 1;
+$fn$;
+
+REVOKE ALL ON FUNCTION estimate_by_public_token(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION estimate_by_public_token(text) TO plumber;
+
+-- C1: public pay page — same capability pattern for invoices.
+CREATE OR REPLACE FUNCTION invoice_by_public_token(p_token text)
+RETURNS TABLE (id text, organization_id text)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $fn$
+  SELECT id, organization_id FROM invoices
+  WHERE public_token = p_token LIMIT 1;
+$fn$;
+
+REVOKE ALL ON FUNCTION invoice_by_public_token(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION invoice_by_public_token(text) TO plumber;

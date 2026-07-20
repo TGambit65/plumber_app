@@ -321,3 +321,59 @@ shippable and verified end-to-end before moving on.
 - RLS: every new action goes through `withTenant`; `db:verify-rls` stays in
   the chain.
 - Reseed pristine + full suite green before each commit, as with D1–D5.
+
+## 6. Phase C1 — The customer-facing loop ✅ DONE
+
+Follow-on chosen after M6: close the loop that ends, for the customer, with
+"a text with a link". Now the estimate itself travels: send really emails,
+the customer opens a branded page on their phone, picks an option, e-signs,
+and pays the invoice online — while every guardrail (approval-gated egress,
+RLS, audit, money-immutability) stays intact.
+
+**Public tokenized pages (sessionless capability URLs)**
+- `estimates.publicToken` / `invoices.publicToken` (unique, 48-hex, minted on
+  first send — idempotent). Global lookups via SECURITY DEFINER functions
+  `estimate_by_public_token` / `invoice_by_public_token` (rls.sql), the same
+  pattern as calendar feeds; everything after re-enters `withTenant(org)`.
+- `/proposal/[token]`: branded (org name/color/phone/license) good-better-best
+  cards with financing framing, notes, expiry. Opens count views inline
+  (SENT→VIEWED, hot-signal notification at 2+ views — same math as the demo
+  hook). Approve = radio + typed-name e-sign → `approveEstimateCore`, the
+  EXACT pipeline the internal button uses (option select, 5% commission,
+  sold-job creation, follow-up stop, lead WON), audited as
+  `via: public_proposal` with `userId: null`. Decline = optional reason →
+  DECLINED, follow-ups skipped, lead LOST with the customer's words.
+- `/pay/[token]`: invoice lines, paid-to-date, balance; terminal states for
+  PAID/VOID; degraded state when Stripe isn't connected (call-the-office).
+- Internal estimate page surfaces the live proposal link once minted.
+
+**Real email (Mailgun connector)**
+- `EMAIL` stub replaced with a live Mailgun Messages API implementation
+  (basic auth `api:key`, form-encoded, `baseUrl` override for mocks/EU;
+  health = GET /v3/domains/{domain}; loud degraded failures; API key
+  encrypted at rest like every password field).
+- `deliverCustomerLink` (comms/deliver.ts): email preferred, Twilio SMS
+  fallback, explicit outcome (SENT / FAILED / SKIPPED_* with reason).
+- Approving an ESTIMATE_SEND now really delivers the proposal link and
+  records the honest outcome (channel, provider id, error) ON the approval
+  row; failure notifies the approver loudly. `markInvoiceSent` delivers
+  balance + pay link the same way.
+
+**Online payments (Stripe connector, new `payments` capability)**
+- Stripe Checkout: POST /v1/checkout/sessions (Bearer secret key,
+  form-encoded, `client_reference_id` round-trips OUR invoice id), hosted
+  page, `baseUrl` override. Health = GET /v1/balance.
+- `/api/webhooks/stripe/[org]`: verifies `Stripe-Signature`
+  (`t=…,v1=HMAC-SHA256(secret, "t.payload")`, constant-time compare, fail
+  closed without a secret) → records the payment (CARD, provider reference)
+  → invoice PAID/PARTIAL — same math as internal recordPayment. Idempotent
+  across Stripe's retried deliveries; forged sig 403, unknown org 404.
+
+**Verification**: 37-check Playwright e2e (`verify-c1.mjs`) driving the whole
+loop against mock Mailgun (:8909) + mock Stripe (:8910) with real signed
+webhooks: queue → approve → email captured → logged-out proposal open (views
+tracked, token-guessing 404s) → e-sign (commission/job/WON asserted in DB) →
+decline path → invoice email → hosted checkout redirect → signed webhook →
+payment recorded → duplicate-delivery no-op → forged 403. Regression:
+verify-m1 + verify-m4 green after the `applyLeadStage` activity-write change;
+140 unit tests; lint clean.

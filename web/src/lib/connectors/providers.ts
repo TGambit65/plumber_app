@@ -26,6 +26,8 @@ import { outlookCalendarConnector } from "./outlook-calendar";
 import { googleMapsConnector } from "./google-maps";
 import { jobberConnector } from "./jobber";
 import { serviceTitanConnector } from "./servicetitan";
+import { emailConnector } from "./email";
+import { stripeConnector } from "./stripe";
 
 /**
  * Connector registry. Odoo (JSON-RPC), HubSpot (CRM v3 REST) and QuickBooks
@@ -233,20 +235,11 @@ export const REGISTRY: Record<string, Connector> = {
   // Messaging — Twilio is a real Messages API implementation (SMS-only).
   TWILIO: twilioConnector,
 
-  EMAIL: makeStub({
-    descriptor: {
-      provider: "EMAIL",
-      label: "Email (SMTP)",
-      emoji: "✉️",
-      capabilities: ["messaging"],
-      blurb: "Outbound email — estimates, invoices & follow-ups via your SMTP relay",
-      configFields: [
-        { key: "host", label: "SMTP host", kind: "text", placeholder: "smtp.mailgun.org", required: true },
-        { key: "fromAddress", label: "From address", kind: "text", placeholder: "office@yourcompany.com", required: true },
-        { key: "password", label: "SMTP password", kind: "password", placeholder: "app password", required: true },
-      ],
-    },
-  }),
+  // Email — real Mailgun Messages API implementation (C1).
+  EMAIL: emailConnector,
+
+  // Online payments — real Stripe Checkout implementation (C1).
+  STRIPE: stripeConnector,
 
   SLACK: makeStub({
     descriptor: {
@@ -297,7 +290,7 @@ export function getConnector(provider: string): Connector | undefined {
   return REGISTRY[provider];
 }
 
-const CAPABILITY_ORDER: ConnectorCapability[] = ["crm", "accounting", "calendar", "geo", "procurement", "jobs", "messaging", "pm"];
+const CAPABILITY_ORDER: ConnectorCapability[] = ["crm", "accounting", "payments", "calendar", "geo", "procurement", "jobs", "messaging", "pm"];
 
 /** Registry grouped by capability, in hub display order (CRM first — required). */
 export function listByCapability(): Array<{ capability: ConnectorCapability; connectors: Connector[] }> {

@@ -14,6 +14,8 @@ import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { audit, logActivity, notify } from "@/lib/actions/helpers";
 import { reallySendEstimate, reallySendFollowUp } from "@/lib/actions/sales";
+import { deliverCustomerLink, publicBaseUrl, type LinkDeliveryOutcome } from "@/lib/comms/deliver";
+import { orgName } from "@/lib/comms/sms";
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -284,8 +286,42 @@ export async function approveOutbound(formData: FormData) {
   }
 
   // Execute the effect by kind.
+  let delivery: LinkDeliveryOutcome | null = null;
   if (row.kind === "ESTIMATE_SEND" && row.estimateId) {
-    await reallySendEstimate(session.organizationId, row.estimateId, row.requestedById);
+    const est = await reallySendEstimate(session.organizationId, row.estimateId, row.requestedById);
+    // C1: really DELIVER the proposal link (email preferred, SMS fallback).
+    const link = `${publicBaseUrl()}/proposal/${est.publicToken}`;
+    delivery = await deliverCustomerLink({
+      organizationId: session.organizationId,
+      customerId: est.customerId,
+      subject: `Your proposal from ${await orgName(session.organizationId)} — ${est.number}`,
+      emailBody: [
+        `Hi ${est.customer.name},`,
+        ``,
+        `Your proposal ${est.number} is ready. View your options and approve online here:`,
+        link,
+        ``,
+        `Questions? Just reply to this email or give us a call.`,
+      ].join("\n"),
+      smsBody: `Your proposal ${est.number} is ready — view options & approve online: ${link}`,
+    });
+    if (delivery.status === "SENT") {
+      await logActivity({
+        kind: delivery.channel === "EMAIL" ? "EMAIL" : "SMS",
+        body: `Proposal link for ${est.number} delivered by ${delivery.channel.toLowerCase()} to ${delivery.recipient}`,
+        userId: session.userId,
+        customerId: est.customerId,
+        leadId: est.leadId ?? undefined,
+      });
+    } else {
+      // Loud degraded surface: the approver sees exactly why nothing went out.
+      await notify(
+        session.userId,
+        `⚠️ Proposal ${est.number} approved but NOT delivered`,
+        delivery.error ?? `Delivery ${delivery.status}`,
+        `/estimates/${est.id}`
+      );
+    }
   } else if (row.kind === "FOLLOW_UP_TOUCH" && row.followUpId) {
     await reallySendFollowUp(session.organizationId, row.followUpId, row.requestedById);
   } else if (row.kind === "CUSTOMER_MESSAGE") {
@@ -326,7 +362,20 @@ export async function approveOutbound(formData: FormData) {
   await withTenant(session.organizationId, (tx) =>
     tx
       .update(t.outboundMessages)
-      .set({ status: "APPROVED_SENT", approvedById: session.userId, decidedAt: new Date() })
+      .set({
+        status: "APPROVED_SENT",
+        approvedById: session.userId,
+        decidedAt: new Date(),
+        // C1: honest delivery record on the approval row itself.
+        ...(delivery
+          ? {
+              recipient: delivery.recipient ?? row.recipient,
+              externalSid: delivery.externalId ?? null,
+              deliveryStatus: delivery.status,
+              deliveryError: delivery.error ?? null,
+            }
+          : {}),
+      })
       .where(eq(t.outboundMessages.id, id))
   );
 

@@ -12,6 +12,8 @@ import { lineTotal, money, fmtDateTime } from "@/lib/format";
 import { enabledCustomFieldDefs, enabledEquipmentKinds } from "@/lib/trade-packs";
 import { validateCustomFieldValues } from "@/lib/custom-fields";
 import { orgName, sendTransactionalSms } from "@/lib/comms/sms";
+import { deliverCustomerLink, publicBaseUrl } from "@/lib/comms/deliver";
+import { randomBytes } from "crypto";
 import { pushJobToCalendar } from "@/lib/calendar/push";
 import { geocodeProperty } from "@/lib/geo/service";
 
@@ -404,18 +406,59 @@ export async function markInvoiceSent(formData: FormData) {
   const now = new Date();
   const dueAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
   const inv = await withTenant(session.organizationId, async (tx) => {
-    const found = await tx.query.invoices.findFirst({ where: eq(t.invoices.id, invoiceId) });
+    const found = await tx.query.invoices.findFirst({
+      where: eq(t.invoices.id, invoiceId),
+      with: { items: true, payments: true },
+    });
     if (!found || found.status !== "DRAFT") return null;
-    await tx.update(t.invoices).set({ status: "SENT", issuedAt: now, dueAt }).where(eq(t.invoices.id, invoiceId));
-    return found;
+    // C1: mint the public pay-page token on first send (idempotent).
+    const publicToken = found.publicToken ?? randomBytes(24).toString("hex");
+    await tx
+      .update(t.invoices)
+      .set({ status: "SENT", issuedAt: now, dueAt, publicToken })
+      .where(eq(t.invoices.id, invoiceId));
+    return { ...found, publicToken };
   });
   if (!inv) return;
+
+  // C1: really DELIVER the balance + pay link (email preferred, SMS fallback).
+  const total = lineTotal(inv.items);
+  const balance = total - inv.payments.reduce((s, p) => s + p.amountCents, 0);
+  const link = `${publicBaseUrl()}/pay/${inv.publicToken}`;
+  const delivery = await deliverCustomerLink({
+    organizationId: session.organizationId,
+    customerId: inv.customerId,
+    subject: `Invoice ${inv.number} — ${money(balance)} due`,
+    emailBody: [
+      `Your invoice ${inv.number} is ready.`,
+      ``,
+      `Balance due: ${money(balance)}`,
+      `Due date: ${fmtDateTime(dueAt)}`,
+      ``,
+      `View and pay online here:`,
+      link,
+    ].join("\n"),
+    smsBody: `Invoice ${inv.number}: ${money(balance)} due. View & pay online: ${link}`,
+  });
+
   await logActivity({
     kind: "SYSTEM",
-    body: `Invoice ${inv.number} sent to customer (due ${fmtDateTime(dueAt)})`,
+    body: `Invoice ${inv.number} sent to customer (due ${fmtDateTime(dueAt)})${
+      delivery.status === "SENT"
+        ? ` — pay link delivered by ${delivery.channel.toLowerCase()} to ${delivery.recipient}`
+        : ` — ⚠️ pay link NOT delivered (${delivery.error ?? delivery.status})`
+    }`,
     userId: session.userId,
     customerId: inv.customerId,
   });
+  if (delivery.status !== "SENT") {
+    await notify(
+      session.userId,
+      `⚠️ Invoice ${inv.number} marked sent but NOT delivered`,
+      delivery.error ?? `Delivery ${delivery.status}`,
+      `/invoices`
+    );
+  }
   revalidatePath("/invoices");
 }
 

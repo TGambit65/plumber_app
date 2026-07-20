@@ -45,3 +45,41 @@ export async function notify(userId: string, title: string, body?: string, href?
     tx.insert(t.notifications).values({ userId, title, body, href })
   );
 }
+
+// ── C1: org-scoped variants for PUBLIC (sessionless) surfaces ────────────────
+// The public proposal/pay pages resolve the org from an unguessable token, not
+// a session — these take organizationId explicitly instead of requireSession.
+
+export async function auditOrg(
+  organizationId: string,
+  userId: string | null,
+  action: string,
+  entity: string,
+  entityId?: string,
+  detail?: Record<string, unknown>
+) {
+  await withTenant(organizationId, (tx) =>
+    tx.insert(t.auditLogs).values({ userId, action, entity, entityId, detail })
+  );
+}
+
+export async function logActivityOrg(
+  organizationId: string,
+  input: {
+    kind: "CALL" | "SMS" | "EMAIL" | "NOTE" | "STATUS" | "SYSTEM" | "ESTIMATE_VIEW" | "PAYMENT" | "REVIEW";
+    body: string;
+    userId?: string;
+    customerId?: string;
+    jobId?: string;
+    leadId?: string;
+    projectId?: string;
+  }
+) {
+  await withTenant(organizationId, (tx) => tx.insert(t.activities).values(input));
+}
+
+export async function notifyOrg(organizationId: string, userId: string, title: string, body?: string, href?: string) {
+  await withTenant(organizationId, (tx) =>
+    tx.insert(t.notifications).values({ userId, title, body, href })
+  );
+}

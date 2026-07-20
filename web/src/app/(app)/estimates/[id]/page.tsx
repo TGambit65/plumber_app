@@ -225,6 +225,28 @@ export default async function EstimateDetailPage({ params }: { params: { id: str
                   : "sending starts the 7-day sequence"}
             </div>
           </div>
+          {/* C1: the live customer-facing proposal link (minted on send). */}
+          {est.publicToken ? (
+            <div className="min-w-64">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Customer proposal link</div>
+              <div className="mt-1 flex items-center gap-2">
+                <input
+                  readOnly
+                  value={`/proposal/${est.publicToken}`}
+                  className="w-56 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-xs text-slate-600"
+                />
+                <a
+                  href={`/proposal/${est.publicToken}`}
+                  target="_blank"
+                  className="text-sm text-blue-600 hover:underline"
+                  title="Opens the branded page the customer sees — view, pick an option, e-sign"
+                >
+                  Open ↗
+                </a>
+              </div>
+              <div className="mt-0.5 text-xs text-slate-500">opens counted as views · no login needed</div>
+            </div>
+          ) : null}
           <div className="ml-auto flex flex-wrap gap-2">
             {est.status === "DRAFT" ? (
               <form action={markEstimateSent}>
