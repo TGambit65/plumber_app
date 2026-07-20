@@ -1,6 +1,6 @@
 import "server-only";
 import { t, withTenant } from "@/db";
-import { desc, ilike, or, eq } from "drizzle-orm";
+import { desc, ilike, or, eq, and, isNull } from "drizzle-orm";
 import { decryptSecret } from "@/lib/crypto/secrets";
 
 export type KbHit = {
@@ -65,7 +65,9 @@ export class LocalKnowledgeStore implements KnowledgeStore {
     const q = query.trim();
     const rows = await withTenant(this.organizationId, (tx) =>
       tx.query.kbArticles.findMany({
-        where: q ? or(ilike(t.kbArticles.title, `%${q}%`), ilike(t.kbArticles.body, `%${q}%`)) : undefined,
+        where: q
+          ? and(isNull(t.kbArticles.archivedAt), or(ilike(t.kbArticles.title, `%${q}%`), ilike(t.kbArticles.body, `%${q}%`)))
+          : isNull(t.kbArticles.archivedAt),
         orderBy: [desc(t.kbArticles.updatedAt)],
         limit: opts?.limit ?? 50,
       })

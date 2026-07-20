@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, isNull } from "drizzle-orm";
 import { Card, CardBody, CardHeader, PageHeader, EmptyState, Avatar, Badge } from "@/components/ui";
 import { ROLE_LABELS } from "@/lib/permissions";
 import { timeAgo } from "@/lib/format";
@@ -17,7 +17,8 @@ export default async function MessagesPage() {
     const myParts = await tx
       .select({ conversationId: t.conversationParticipants.conversationId, lastReadAt: t.conversationParticipants.lastReadAt })
       .from(t.conversationParticipants)
-      .where(eq(t.conversationParticipants.userId, session.userId));
+      // M4: per-user archived threads stay out of the list (unarchive from the thread itself).
+      .where(and(eq(t.conversationParticipants.userId, session.userId), isNull(t.conversationParticipants.archivedAt)));
     const convoIds = myParts.map((p) => p.conversationId);
     const lastRead = new Map(myParts.map((p) => [p.conversationId, p.lastReadAt?.getTime() ?? 0]));
 

@@ -34,6 +34,12 @@ import {
   testConnector,
 } from "@/lib/actions/connectors";
 import { deleteCommissionRule, updateCommissionRule } from "@/lib/actions/money";
+import {
+  assignTruck,
+  resetUserPassword,
+  updateOrganization,
+  updateUserProfile,
+} from "@/lib/actions/office";
 import { configureSso, disableSso } from "@/lib/actions/sso";
 import { enablePack, disablePack, provisionPackTemplates } from "@/lib/actions/packs";
 import { packCatalog } from "@/lib/trade-packs";
@@ -145,7 +151,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: { t
       {tab === "commissions" ? <CommissionsTab organizationId={session.organizationId} /> : null}
       {tab === "audit" ? <AuditTab organizationId={session.organizationId} /> : null}
       {tab === "packs" ? <PacksTab organizationId={session.organizationId} /> : null}
-      {tab === "company" ? <CompanyTab /> : null}
+      {tab === "company" ? <CompanyTab organizationId={session.organizationId} /> : null}
     </div>
   );
 }
@@ -190,10 +196,11 @@ function PermButton({
 }
 
 async function TeamTab({ currentUserId, organizationId }: { currentUserId: string; organizationId: string }) {
-  const [users, overrides] = await withTenant(organizationId, (tx) =>
+  const [users, overrides, trucks] = await withTenant(organizationId, (tx) =>
     Promise.all([
       tx.query.users.findMany({ with: { truck: true }, orderBy: asc(t.users.name) }),
       tx.select().from(t.userPermissionOverrides),
+      tx.query.inventoryLocations.findMany({ where: eq(t.inventoryLocations.kind, "TRUCK") }),
     ])
   );
   const ovByUser = new Map<string, Map<Permission, boolean>>();
@@ -252,6 +259,42 @@ async function TeamTab({ currentUserId, organizationId }: { currentUserId: strin
                     <input type="hidden" name="userId" value={u.id} />
                     <input type="hidden" name="next" value="true" />
                     <Button type="submit" size="sm" variant="success">Reactivate</Button>
+                  </form>
+                ) : null}
+              </div>
+
+              {/* M5: identity edit, password reset, truck assignment */}
+              <div className="flex flex-wrap items-start gap-2">
+                <details className="rounded-lg border border-slate-200">
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-700">✏️ Edit name / email / phone</summary>
+                  <form action={updateUserProfile} className="flex flex-wrap items-end gap-2 border-t border-slate-100 p-3">
+                    <input type="hidden" name="userId" value={u.id} />
+                    <div className="w-44"><Field label="Name"><Input name="name" required defaultValue={u.name} /></Field></div>
+                    <div className="w-52"><Field label="Email"><Input name="email" type="email" required defaultValue={u.email} /></Field></div>
+                    <div className="w-36"><Field label="Phone"><Input name="phone" defaultValue={u.phone ?? ""} /></Field></div>
+                    <Button type="submit" size="sm" variant="secondary">Save</Button>
+                  </form>
+                </details>
+                <details className="rounded-lg border border-slate-200">
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-700">🔑 Reset password</summary>
+                  <form action={resetUserPassword} className="flex flex-wrap items-end gap-2 border-t border-slate-100 p-3">
+                    <input type="hidden" name="userId" value={u.id} />
+                    <div className="w-48"><Field label="Temp password (min 8 chars)"><Input name="password" required minLength={8} placeholder="give this to the user" /></Field></div>
+                    <Button type="submit" size="sm" variant="secondary">Reset</Button>
+                  </form>
+                </details>
+                {u.role === "TECH" ? (
+                  <form action={assignTruck} className="flex items-end gap-2">
+                    <input type="hidden" name="userId" value={u.id} />
+                    <Field label="🚚 Truck">
+                      <Select name="locationId" defaultValue={u.truck?.id ?? ""} className="w-40">
+                        <option value="">No truck</option>
+                        {trucks.map((tr) => (
+                          <option key={tr.id} value={tr.id}>{tr.name}</option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Button type="submit" size="sm" variant="secondary">Assign</Button>
                   </form>
                 ) : null}
               </div>
@@ -1119,38 +1162,49 @@ async function PacksTab({ organizationId }: { organizationId: string }) {
 
 // ── Company ──────────────────────────────────────────────────────────────────
 
-function CompanyTab() {
+async function CompanyTab({ organizationId }: { organizationId: string }) {
+  // M5: the company profile is REAL data now (organizations columns), not JSX literals.
+  const org = await db.query.organizations.findFirst({ where: eq(t.organizations.id, organizationId) });
+  if (!org) return null;
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader title="Company" subtitle="Read-only demo profile" />
+        <CardHeader title="Company profile" subtitle="Shown on customer-facing documents — slug is immutable (it lives in webhook & calendar URLs)" />
         <CardBody>
-          <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Business name</dt>
-              <dd className="mt-0.5 text-slate-800">Plumb Zebra LLC</dd>
+          <form action={updateOrganization} className="grid gap-3 sm:grid-cols-2">
+            <Field label="Business name">
+              <Input name="name" required defaultValue={org.name} />
+            </Field>
+            <Field label="Brand color">
+              <Input name="brandPrimary" type="color" defaultValue={org.brandPrimary ?? "#0057FF"} className="h-10 w-24 p-1" />
+            </Field>
+            <Field label="Business phone">
+              <Input name="businessPhone" defaultValue={org.businessPhone ?? ""} placeholder="509-555-0100" />
+            </Field>
+            <Field label="Business email">
+              <Input name="businessEmail" type="email" defaultValue={org.businessEmail ?? ""} placeholder="office@company.com" />
+            </Field>
+            <div className="sm:col-span-2">
+              <Field label="Business address">
+                <Input name="businessAddress" defaultValue={org.businessAddress ?? ""} placeholder="Street, city, state zip" />
+              </Field>
             </div>
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">License</dt>
-              <dd className="mt-0.5 text-slate-800">OH Master Plumber #PL-48122</dd>
+            <Field label="License #">
+              <Input name="licenseNumber" defaultValue={org.licenseNumber ?? ""} placeholder="WA Master Plumber #…" />
+            </Field>
+            <Field label="Service area">
+              <Input name="serviceArea" defaultValue={org.serviceArea ?? ""} placeholder="Spokane + 30-mile radius" />
+            </Field>
+            <div className="sm:col-span-2">
+              <Field label="Hours of operation">
+                <Input name="hoursOfOperation" defaultValue={org.hoursOfOperation ?? ""} placeholder="Mon–Fri 7–6 · 24/7 emergency" />
+              </Field>
             </div>
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Hours</dt>
-              <dd className="mt-0.5 text-slate-800">Mon–Fri 7:00 AM – 6:00 PM · 24/7 emergency dispatch</dd>
+            <div className="sm:col-span-2 flex items-center gap-3">
+              <Button type="submit" size="sm">Save company profile</Button>
+              <span className="text-xs text-slate-400">URL slug: /{org.slug} (immutable)</span>
             </div>
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Service area</dt>
-              <dd className="mt-0.5 text-slate-800">Riverton, Maple Falls & surrounding counties (30-mile radius)</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Phone</dt>
-              <dd className="mt-0.5 text-slate-800">555-APEX-247</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Email</dt>
-              <dd className="mt-0.5 text-slate-800">hello@apexplumbing.demo</dd>
-            </div>
-          </dl>
+          </form>
         </CardBody>
       </Card>
       <Card className="border-slate-200 bg-slate-50/60">

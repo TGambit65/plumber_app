@@ -34,6 +34,9 @@ import {
   advanceClaimStatus,
   advanceSupplement,
   createSupplement,
+  reopenClaim,
+  updateClaimRefs,
+  updateSupplement,
   exportClaimPackage,
   linkJobToClaim,
   unlinkJobFromClaim,
@@ -88,7 +91,7 @@ export default async function ClaimDetailPage({ params }: { params: { id: string
       },
     });
     if (!claim) return null;
-    const [linkableJobs, customerActivities] = await Promise.all([
+    const [linkableJobs, customerActivities, allCarriers, customerProperties] = await Promise.all([
       tx.query.jobs.findMany({
         where: and(eq(t.jobs.customerId, claim.customerId), isNull(t.jobs.claimId)),
         orderBy: [desc(t.jobs.createdAt)],
@@ -98,11 +101,15 @@ export default async function ClaimDetailPage({ params }: { params: { id: string
         with: { user: true },
         orderBy: [desc(t.activities.createdAt)],
       }),
+      tx.query.carriers.findMany({ with: { adjusters: true }, orderBy: [t.carriers.name] }),
+      tx.query.properties.findMany({
+        where: and(eq(t.properties.customerId, claim.customerId), isNull(t.properties.archivedAt)),
+      }),
     ]);
-    return { claim, linkableJobs, customerActivities };
+    return { claim, linkableJobs, customerActivities, allCarriers, customerProperties };
   });
   if (!data) notFound();
-  const { claim, linkableJobs } = data;
+  const { claim, linkableJobs, allCarriers, customerProperties } = data;
 
   // Claims have no activity FK — claim events are logged against the customer
   // with the claim number in the body; filter the customer timeline down.
@@ -168,6 +175,65 @@ export default async function ClaimDetailPage({ params }: { params: { id: string
           })}
         </div>
       ) : null}
+
+      {/* M5: reopen a closed/denied claim */}
+      {claim.status === "CLOSED" || claim.status === "DENIED" ? (
+        <form action={reopenClaim} className="mb-4 flex flex-wrap items-end gap-2 rounded-xl border border-slate-300 bg-slate-50 px-4 py-3">
+          <input type="hidden" name="claimId" value={claim.id} />
+          <div className="w-64">
+            <Field label={`Reopen this ${claim.status} claim — reason (required)`}>
+              <Input name="reason" required placeholder="e.g. carrier reconsidered the scope" />
+            </Field>
+          </div>
+          <Button type="submit" size="sm" variant="secondary">
+            ♻️ Reopen → Documenting
+          </Button>
+        </form>
+      ) : null}
+
+      {/* M5: reassign refs — claim #, carrier, adjuster, property */}
+      <details className="mb-4 rounded-xl border border-slate-200 bg-white">
+        <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium text-blue-600">🛠 Edit claim # / carrier / adjuster / property</summary>
+        <form action={updateClaimRefs} className="flex flex-wrap items-end gap-2 border-t border-slate-100 p-4">
+          <input type="hidden" name="claimId" value={claim.id} />
+          <div className="w-44">
+            <Field label="Claim #">
+              <Input name="claimNumber" required defaultValue={claim.claimNumber} />
+            </Field>
+          </div>
+          <div className="w-44">
+            <Field label="Carrier">
+              <Select name="carrierId" defaultValue={claim.carrierId ?? ""}>
+                <option value="">—</option>
+                {allCarriers.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <div className="w-44">
+            <Field label="Adjuster">
+              <Select name="adjusterId" defaultValue={claim.adjusterId ?? ""}>
+                <option value="">—</option>
+                {allCarriers.flatMap((c) => c.adjusters.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name} ({c.name})</option>
+                )))}
+              </Select>
+            </Field>
+          </div>
+          <div className="w-56">
+            <Field label="Property">
+              <Select name="propertyId" defaultValue={claim.propertyId ?? ""}>
+                <option value="">—</option>
+                {customerProperties.map((pr) => (
+                  <option key={pr.id} value={pr.id}>{pr.address}, {pr.city}</option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <Button type="submit" size="sm" variant="secondary">Save refs</Button>
+        </form>
+      </details>
 
       {/* Stat row */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -333,13 +399,25 @@ export default async function ClaimDetailPage({ params }: { params: { id: string
                       {(SUPPLEMENT_NEXT[s.status] ?? []).length > 0 ? (
                         <div className="mt-2 flex flex-wrap gap-2">
                           {s.status === "DRAFT" ? (
-                            <form action={advanceSupplement}>
-                              <input type="hidden" name="supplementId" value={s.id} />
-                              <input type="hidden" name="to" value="SUBMITTED" />
-                              <Button size="sm" variant="secondary">
-                                📤 Submit to carrier
-                              </Button>
-                            </form>
+                            <>
+                              <form action={advanceSupplement}>
+                                <input type="hidden" name="supplementId" value={s.id} />
+                                <input type="hidden" name="to" value="SUBMITTED" />
+                                <Button size="sm" variant="secondary">
+                                  📤 Submit to carrier
+                                </Button>
+                              </form>
+                              {/* M5: edit while DRAFT */}
+                              <details>
+                                <summary className="cursor-pointer rounded px-1.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50">✏️ Edit…</summary>
+                                <form action={updateSupplement} className="mt-1.5 flex flex-wrap items-end gap-1.5">
+                                  <input type="hidden" name="supplementId" value={s.id} />
+                                  <Input name="description" required defaultValue={s.description} aria-label="Description" className="h-8 w-56 text-xs" />
+                                  <Input name="amount" inputMode="decimal" required defaultValue={(s.amountCents / 100).toFixed(2)} aria-label="Amount" className="h-8 w-20 text-xs" />
+                                  <Button type="submit" size="sm" variant="secondary">Save</Button>
+                                </form>
+                              </details>
+                            </>
                           ) : null}
                           {s.status === "SUBMITTED" ? (
                             <>

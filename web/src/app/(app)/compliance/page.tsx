@@ -28,6 +28,12 @@ import {
   addCertification,
   cancelInspection,
   createTemplate,
+  reopenInspection,
+  rescheduleInspection,
+  revokeCertification,
+  toggleTemplateActive,
+  updateCertification,
+  updateTemplate,
   runRenewalSweep,
   scheduleInspection,
 } from "@/lib/actions/compliance";
@@ -325,14 +331,41 @@ export default async function CompliancePage({
                           <TCell className="whitespace-nowrap">{fmtDateTime(insp.scheduledAt)}</TCell>
                           <TCell className="whitespace-nowrap">{fmtDateTime(insp.completedAt)}</TCell>
                           <TCell>
-                            {insp.status === "SCHEDULED" || insp.status === "IN_PROGRESS" ? (
-                              <form action={cancelInspection}>
-                                <input type="hidden" name="inspectionId" value={insp.id} />
-                                <Button type="submit" variant="ghost" size="sm">
-                                  Cancel
-                                </Button>
-                              </form>
-                            ) : null}
+                            <div className="flex flex-wrap items-start gap-1.5">
+                              {insp.status === "SCHEDULED" || insp.status === "IN_PROGRESS" ? (
+                                <>
+                                  {/* M4: move the appointment or hand it to another inspector */}
+                                  <details>
+                                    <summary className="cursor-pointer rounded px-1.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50">📅 Reschedule…</summary>
+                                    <form action={rescheduleInspection} className="mt-2 w-56 space-y-1.5 rounded-lg border border-slate-200 p-2">
+                                      <input type="hidden" name="inspectionId" value={insp.id} />
+                                      <Input type="datetime-local" name="scheduledAt" required aria-label="New time" className="h-8 text-xs" />
+                                      <Select name="inspectorId" defaultValue={insp.inspectorId ?? ""} aria-label="Inspector" className="h-8 text-xs">
+                                        <option value="">Unassigned</option>
+                                        {users.map((u) => (
+                                          <option key={u.id} value={u.id}>{u.name}</option>
+                                        ))}
+                                      </Select>
+                                      <Button type="submit" size="sm" variant="secondary">Save</Button>
+                                    </form>
+                                  </details>
+                                  <form action={cancelInspection}>
+                                    <input type="hidden" name="inspectionId" value={insp.id} />
+                                    <Button type="submit" variant="ghost" size="sm">
+                                      Cancel
+                                    </Button>
+                                  </form>
+                                </>
+                              ) : null}
+                              {insp.status === "CANCELLED" ? (
+                                <form action={reopenInspection}>
+                                  <input type="hidden" name="inspectionId" value={insp.id} />
+                                  <Button type="submit" variant="secondary" size="sm" title="Puts the inspection back on the schedule">
+                                    ♻️ Reopen
+                                  </Button>
+                                </form>
+                              ) : null}
+                            </div>
                           </TCell>
                         </TRow>
                       );
@@ -454,6 +487,30 @@ export default async function CompliancePage({
                           </div>
                         ) : null}
                       </div>
+                      {/* M4: template management — edit + deactivate */}
+                      <div className="flex flex-wrap items-start gap-1.5 border-t border-slate-100 pt-2">
+                        <details className="min-w-0 flex-1">
+                          <summary className="cursor-pointer rounded px-1.5 py-0.5 text-xs font-medium text-blue-600 hover:bg-blue-50">✏️ Edit template</summary>
+                          <form action={updateTemplate} className="mt-2 space-y-1.5">
+                            <input type="hidden" name="templateId" value={tpl.id} />
+                            <Input name="name" required defaultValue={tpl.name} aria-label="Name" className="h-8 text-xs" />
+                            <Input name="description" defaultValue={tpl.description ?? ""} placeholder="Description" aria-label="Description" className="h-8 text-xs" />
+                            <Textarea name="steps" rows={4} placeholder="Leave blank to keep the current steps — or paste new kind|label|required?|unit? lines" aria-label="Steps" className="text-xs" />
+                            <div className="flex gap-1.5">
+                              <Input name="issuesCertification" defaultValue={tpl.issuesCertification ?? ""} placeholder="Issues cert" aria-label="Issues certification" className="h-8 flex-1 text-xs" />
+                              <Input name="certValidityDays" type="number" min={1} defaultValue={tpl.certValidityDays ?? ""} placeholder="days" aria-label="Cert validity days" className="h-8 w-20 text-xs" />
+                            </div>
+                            <Button type="submit" size="sm" variant="secondary">Save template</Button>
+                          </form>
+                        </details>
+                        <form action={toggleTemplateActive}>
+                          <input type="hidden" name="templateId" value={tpl.id} />
+                          <input type="hidden" name="next" value={String(!tpl.active)} />
+                          <button type="submit" className="rounded px-1.5 py-0.5 text-xs font-medium text-slate-600 hover:bg-slate-100" title={tpl.active ? "Retire — stops new inspections; history untouched" : "Reactivate"}>
+                            {tpl.active ? "🚫 Deactivate" : "♻️ Reactivate"}
+                          </button>
+                        </form>
+                      </div>
                     </CardBody>
                   </Card>
                 );
@@ -560,6 +617,31 @@ export default async function CompliancePage({
                           ) : (
                             <span className="text-xs text-slate-400">manual</span>
                           )}
+                          {/* M4: certification management — edit/renew + revoke */}
+                          <div className="mt-1 flex flex-wrap items-start gap-1.5">
+                            <details>
+                              <summary className="cursor-pointer rounded px-1 py-0.5 text-[11px] font-medium text-blue-600 hover:bg-blue-50">✏️ Edit / renew</summary>
+                              <form action={updateCertification} className="mt-1.5 w-56 space-y-1.5 rounded-lg border border-slate-200 p-2">
+                                <input type="hidden" name="certId" value={cert.id} />
+                                <Input name="name" required defaultValue={cert.name} aria-label="Name" className="h-8 text-xs" />
+                                <Input name="certificateNumber" defaultValue={cert.certificateNumber ?? ""} placeholder="Cert #" aria-label="Cert number" className="h-8 text-xs" />
+                                <Input name="issuingAuthority" defaultValue={cert.issuingAuthority ?? ""} placeholder="Authority" aria-label="Authority" className="h-8 text-xs" />
+                                <div className="flex gap-1.5">
+                                  <Input type="date" name="issuedAt" defaultValue={cert.issuedAt ? cert.issuedAt.toISOString().slice(0, 10) : ""} aria-label="Issued" className="h-8 flex-1 text-xs" />
+                                  <Input type="date" name="expiresAt" defaultValue={cert.expiresAt ? cert.expiresAt.toISOString().slice(0, 10) : ""} aria-label="Expires (set later to renew)" className="h-8 flex-1 text-xs" />
+                                </div>
+                                <Button type="submit" size="sm" variant="secondary">Save cert</Button>
+                              </form>
+                            </details>
+                            <details>
+                              <summary className="cursor-pointer rounded px-1 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50">⛔ Revoke…</summary>
+                              <form action={revokeCertification} className="mt-1.5 flex w-48 items-end gap-1.5">
+                                <input type="hidden" name="certId" value={cert.id} />
+                                <Input name="reason" required placeholder="reason" aria-label="Revocation reason" className="h-8 flex-1 text-xs" />
+                                <Button type="submit" size="sm" variant="danger">Go</Button>
+                              </form>
+                            </details>
+                          </div>
                         </TCell>
                       </TRow>
                     ))}
@@ -581,6 +663,7 @@ export default async function CompliancePage({
                     <Select name="holderType" defaultValue="USER">
                       <option value="USER">User</option>
                       <option value="ORGANIZATION">Organization</option>
+                      <option value="EQUIPMENT">Equipment</option>
                     </Select>
                   </Field>
                   <Field label="User (for user-held certs)">
@@ -594,6 +677,17 @@ export default async function CompliancePage({
                     </Select>
                   </Field>
                 </div>
+                <Field label="Equipment (for equipment-held certs)">
+                  <Select name="equipmentId" defaultValue="">
+                    <option value="">— none —</option>
+                    {equipmentRows.map((e) => (
+                      <option key={e.id} value={e.id}>
+                        {e.kind}
+                        {e.brand ? ` · ${e.brand}` : ""} @ {e.property.address}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Field label="Cert #">
                     <Input name="certificateNumber" placeholder="JP-88213" />

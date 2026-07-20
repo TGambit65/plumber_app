@@ -1,6 +1,6 @@
 # Management Functionality Plan — full CRUD/lifecycle across every side-menu screen
 
-**Status: IN PROGRESS** — M1 ✅ · M2 ✅ · M3 ✅ DONE · M4–M6 pending.
+**Status: IN PROGRESS** — M1 ✅ · M2 ✅ · M3 ✅ · M4 ✅ · M5 ✅ DONE · M6 (optional polish) pending.
 
 ## 1. The problem
 
@@ -193,7 +193,22 @@ load, optional-line total math, reminder queue, and PAID immutability.
 - Un-approve APPROVED→PENDING with reason; PAID stays immutable.
 - Manual entry create/adjust (audited) for spiffs/corrections.
 
-### Phase M4 — Knowledge, messages, approvals, compliance
+### Phase M4 — Knowledge, messages, approvals, compliance ✅ DONE
+
+Shipped: KB `updateKbArticle` (updatedAt finally real; editing clears
+verification), archive/unpublish + republish (hidden from list AND OrgMemory
+keyword search), admin un-verify. Messages: group rename / add / remove
+participants (creator-or-admin), leave group, per-user thread archive
+(`conversation_participants.archived_at` — never global), delete-own-message
+within a 15-minute grace window rendering a "message removed" placeholder.
+Approvals: withdraw-own-pending (the CANCELLED enum's first path), edit own
+subject/body while pending, ⚡ bulk-approve for the low-risk follow-up-touch
+queue. Compliance: template edit + deactivate/reactivate, inspection
+reschedule/reassign + CANCELLED→SCHEDULED reopen, certification edit/renew
+(pushed expiry resets the renewal cycle) + revoke-with-reason, EQUIPMENT
+cert holders supported end-to-end.
+Verified: 24-check Playwright e2e (`verify-m4.mjs`) with DB + audit
+assertions.
 
 **Knowledge base**
 - `updateKbArticle` (title, body, category, tags) — finally makes
@@ -220,7 +235,23 @@ load, optional-line total math, reminder queue, and PAID immutability.
   (schema supports it, form doesn't).
 - Reschedule inspection + reassign inspector; reopen a CANCELLED inspection.
 
-### Phase M5 — Inventory, claims, settings/admin
+### Phase M5 — Inventory, claims, settings/admin ✅ DONE
+
+Shipped via `src/lib/actions/inventory.ts` (14 actions) + claims/office
+extensions. Inventory: add stock rows, edit min/max/bin, location CRUD with
+truck→tech assignment and a retire guard (blocked while stock remains),
+warehouse⇄truck transfers, manual PO creation, line add/edit/remove while
+open, cancel (new CANCELLED enum value), PER-LINE partial receive (PARTIAL
+finally reachable; units land in the warehouse), RECEIVED→BILLED, and
+part-request editing. Claims: carrier/adjuster editing, claim # + carrier/
+adjuster/property reassignment (validated), CLOSED/DENIED→DOCUMENTING
+reopen with reason, DRAFT supplement editing. Admin: user name/email/phone
+editing, admin password reset (verified by signing in with the temp
+password), truck assignment on the Team tab, and a Company tab backed by
+real `organizations` columns (businessPhone/Email/Address, licenseNumber,
+serviceArea, hoursOfOperation, brand color) — slug stays immutable.
+Verified: 22-check Playwright e2e (`verify-m5.mjs`) with DB + audit
+assertions.
 
 **Inventory**
 - Add stock row (start tracking an item at a location — the empty state

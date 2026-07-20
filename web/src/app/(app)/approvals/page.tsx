@@ -22,9 +22,12 @@ import {
 import { fmtDateTime, timeAgo } from "@/lib/format";
 import {
   approveOutbound,
+  bulkApproveFollowUps,
   queueCustomerMessage,
   queueLicensedSignoff,
   rejectOutbound,
+  updateOutbound,
+  withdrawOutbound,
 } from "@/lib/actions/approvals";
 
 export const dynamic = "force-dynamic";
@@ -164,6 +167,14 @@ export default async function ApprovalsPage() {
                       {meta.emoji} {meta.label}
                     </span>
                     <Badge tone={meta.tone}>{group.items.length}</Badge>
+                    {/* M4: low-risk bulk approve — follow-up touches only */}
+                    {group.kind === "FOLLOW_UP_TOUCH" && group.items.length > 1 ? (
+                      <form action={bulkApproveFollowUps}>
+                        <Button type="submit" size="sm" variant="secondary" title="Approves & sends every pending follow-up touch">
+                          ⚡ Approve all {group.items.length}
+                        </Button>
+                      </form>
+                    ) : null}
                   </div>
                   <div className="grid gap-3 lg:grid-cols-2">
                     {group.items.map((row) => {
@@ -235,6 +246,28 @@ export default async function ApprovalsPage() {
                                   </Button>
                                 </form>
                               </details>
+                              {/* M4: requester-side controls — edit or withdraw while pending */}
+                              {row.requestedById === session.userId || session.role === "ADMIN" ? (
+                                <>
+                                  <details>
+                                    <summary className="inline-flex cursor-pointer list-none items-center rounded-lg px-2 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50">
+                                      ✏️ Edit…
+                                    </summary>
+                                    <form action={updateOutbound} className="mt-2 space-y-1.5">
+                                      <input type="hidden" name="id" value={row.id} />
+                                      <Input name="subject" defaultValue={row.subject ?? ""} placeholder="Subject" aria-label="Subject" className="h-8 text-xs" />
+                                      <Textarea name="body" rows={2} required defaultValue={row.body} aria-label="Body" className="text-xs" />
+                                      <Button type="submit" size="sm" variant="secondary">Save changes</Button>
+                                    </form>
+                                  </details>
+                                  <form action={withdrawOutbound} className="ml-auto">
+                                    <input type="hidden" name="id" value={row.id} />
+                                    <Button type="submit" size="sm" variant="ghost" title="Cancels the request — nothing sends">
+                                      ↩ Withdraw
+                                    </Button>
+                                  </form>
+                                </>
+                              ) : null}
                             </div>
                           </CardBody>
                         </Card>

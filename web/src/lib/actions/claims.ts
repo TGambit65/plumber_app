@@ -158,6 +158,144 @@ export async function updateClaimFacts(formData: FormData) {
   revalidateClaims(claimId);
 }
 
+// ── M5: claim reassignment, reopen, carrier/adjuster & supplement editing ────
+
+/** Reassign the claim's references — carrier, adjuster, property — and fix the
+ *  claim number itself (a typo'd claim # was previously permanent). */
+export async function updateClaimRefs(formData: FormData) {
+  const session = await guard();
+  const claimId = str(formData, "claimId");
+  const claimNumber = str(formData, "claimNumber");
+  if (!claimId || !claimNumber) return;
+  const carrierId = str(formData, "carrierId") || null;
+  const adjusterId = str(formData, "adjusterId") || null;
+  const propertyId = str(formData, "propertyId") || null;
+
+  const claim = await withTenant(session.organizationId, async (tx) => {
+    const claim = await tx.query.claims.findFirst({ where: eq(t.claims.id, claimId) });
+    if (!claim) throw new Error("Claim not found.");
+    if (adjusterId) {
+      const adj = await tx.query.adjusters.findFirst({ where: eq(t.adjusters.id, adjusterId) });
+      if (!adj) throw new Error("Adjuster not found");
+      if (carrierId && adj.carrierId !== carrierId) throw new Error("That adjuster works for a different carrier");
+    }
+    if (propertyId) {
+      const prop = await tx.query.properties.findFirst({ where: eq(t.properties.id, propertyId) });
+      if (!prop || prop.customerId !== claim.customerId) throw new Error("Property does not belong to the claim's customer");
+    }
+    await tx
+      .update(t.claims)
+      .set({ claimNumber, carrierId, adjusterId, propertyId })
+      .where(eq(t.claims.id, claimId));
+    return claim;
+  });
+
+  await audit(session.userId, "CLAIM_REFS_UPDATED", "Claim", claimId, {
+    claimNumber,
+    carrierId,
+    adjusterId,
+    propertyId,
+    previousNumber: claim.claimNumber,
+  });
+  revalidateClaims(claimId);
+}
+
+/** Reopen a CLOSED/DENIED claim back into DOCUMENTING with a required reason. */
+export async function reopenClaim(formData: FormData) {
+  const session = await guard();
+  const claimId = str(formData, "claimId");
+  const reason = str(formData, "reason");
+  if (!claimId) return;
+  if (!reason) throw new Error("A reopen reason is required");
+
+  const claim = await withTenant(session.organizationId, async (tx) => {
+    const claim = await tx.query.claims.findFirst({ where: eq(t.claims.id, claimId) });
+    if (!claim) throw new Error("Claim not found.");
+    if (claim.status !== "CLOSED" && claim.status !== "DENIED") {
+      throw new Error("Only CLOSED or DENIED claims can be reopened");
+    }
+    await tx.update(t.claims).set({ status: "DOCUMENTING" }).where(eq(t.claims.id, claimId));
+    return claim;
+  });
+
+  await audit(session.userId, "CLAIM_REOPENED", "Claim", claimId, {
+    claimNumber: claim.claimNumber,
+    from: claim.status,
+    reason,
+  });
+  await logActivity({
+    kind: "STATUS",
+    body: `Claim ${claim.claimNumber} reopened (${claim.status} → DOCUMENTING) — ${reason}`,
+    userId: session.userId,
+    customerId: claim.customerId,
+  });
+  revalidateClaims(claimId);
+}
+
+/** Fix a carrier record — a typo'd portal URL is no longer permanent. */
+export async function updateCarrier(formData: FormData) {
+  const session = await guard();
+  const carrierId = str(formData, "carrierId");
+  const name = str(formData, "name");
+  if (!carrierId || !name) return;
+  await withTenant(session.organizationId, (tx) =>
+    tx
+      .update(t.carriers)
+      .set({
+        name,
+        phone: str(formData, "phone") || null,
+        email: str(formData, "email") || null,
+        claimsPortalUrl: str(formData, "claimsPortalUrl") || null,
+        notes: str(formData, "notes") || null,
+      })
+      .where(eq(t.carriers.id, carrierId))
+  );
+  await audit(session.userId, "UPDATE", "Carrier", carrierId, { name });
+  revalidateClaims();
+}
+
+export async function updateAdjuster(formData: FormData) {
+  const session = await guard();
+  const adjusterId = str(formData, "adjusterId");
+  const name = str(formData, "name");
+  if (!adjusterId || !name) return;
+  await withTenant(session.organizationId, (tx) =>
+    tx
+      .update(t.adjusters)
+      .set({
+        name,
+        phone: str(formData, "phone") || null,
+        email: str(formData, "email") || null,
+        notes: str(formData, "notes") || null,
+      })
+      .where(eq(t.adjusters.id, adjusterId))
+  );
+  await audit(session.userId, "UPDATE", "Adjuster", adjusterId, { name });
+  revalidateClaims();
+}
+
+/** Edit a supplement while DRAFT (submitted/decided supplements are records). */
+export async function updateSupplement(formData: FormData) {
+  const session = await guard();
+  const supplementId = str(formData, "supplementId");
+  const description = str(formData, "description");
+  const amountCents = dollarsToCents(formData, "amount");
+  if (!supplementId || !description || amountCents == null) return;
+
+  const sup = await withTenant(session.organizationId, async (tx) => {
+    const sup = await tx.query.claimSupplements.findFirst({ where: eq(t.claimSupplements.id, supplementId) });
+    if (!sup) throw new Error("Supplement not found");
+    if (sup.status !== "DRAFT") throw new Error(`A ${sup.status} supplement can't be edited`);
+    await tx
+      .update(t.claimSupplements)
+      .set({ description, amountCents })
+      .where(eq(t.claimSupplements.id, supplementId));
+    return sup;
+  });
+  await audit(session.userId, "UPDATE", "ClaimSupplement", supplementId, { number: sup.number, amountCents });
+  revalidateClaims(sup.claimId);
+}
+
 // ── Job linkage ──────────────────────────────────────────────────────────────
 
 export async function linkJobToClaim(formData: FormData) {

@@ -118,6 +118,85 @@ export async function markKbVerified(formData: FormData) {
   revalidatePath("/kb");
 }
 
+// ── KB: M4 management (edit / archive / un-verify) ───────────────────────────
+
+/** Edit an article — finally makes updatedAt real. Editing clears verifiedAt
+ *  (stale content must be re-verified by an admin). */
+export async function updateKbArticle(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "kb.author")) throw new Error("Not allowed");
+  const id = str(formData.get("id"));
+  const title = str(formData.get("title"));
+  const body = str(formData.get("body"));
+  if (!id || !title || !body) return;
+  const rawCat = str(formData.get("category"));
+  const category: KbCategory = (KB_CATEGORIES as readonly string[]).includes(rawCat) ? (rawCat as KbCategory) : "SOP";
+  const tags = str(formData.get("tags")).split(",").map((s) => s.trim()).filter(Boolean);
+
+  const article = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.kbArticles.findFirst({ where: eq(t.kbArticles.id, id) });
+    if (!existing) return null;
+    await tx
+      .update(t.kbArticles)
+      .set({ title, body, category, tags, updatedAt: new Date(), verifiedAt: null })
+      .where(eq(t.kbArticles.id, id));
+    return existing;
+  });
+  if (!article) return;
+  await audit(session.userId, "UPDATE", "KbArticle", id, { title, verificationCleared: article.verifiedAt !== null });
+  revalidatePath(`/kb/${article.slug}`);
+  revalidatePath("/kb");
+}
+
+/** Unpublish an outdated article — hidden from the list + search, restorable. */
+export async function archiveKbArticle(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "kb.author")) throw new Error("Not allowed");
+  const id = str(formData.get("id"));
+  if (!id) return;
+  const article = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.kbArticles.findFirst({ where: eq(t.kbArticles.id, id) });
+    if (!existing) return null;
+    await tx.update(t.kbArticles).set({ archivedAt: new Date() }).where(eq(t.kbArticles.id, id));
+    return existing;
+  });
+  if (!article) return;
+  await audit(session.userId, "KB_ARCHIVED", "KbArticle", id, { title: article.title });
+  revalidatePath("/kb");
+  redirect("/kb");
+}
+
+export async function unarchiveKbArticle(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "kb.author")) throw new Error("Not allowed");
+  const id = str(formData.get("id"));
+  if (!id) return;
+  const article = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.kbArticles.findFirst({ where: eq(t.kbArticles.id, id) });
+    if (!existing?.archivedAt) return null;
+    await tx.update(t.kbArticles).set({ archivedAt: null }).where(eq(t.kbArticles.id, id));
+    return existing;
+  });
+  if (!article) return;
+  await audit(session.userId, "KB_UNARCHIVED", "KbArticle", id, { title: article.title });
+  revalidatePath(`/kb/${article.slug}`);
+  revalidatePath("/kb");
+}
+
+/** Un-verify (admin) — flags the article as needing re-review. */
+export async function unverifyKbArticle(formData: FormData) {
+  const session = await requireSession();
+  if (session.role !== "ADMIN") throw new Error("Not allowed");
+  const id = str(formData.get("id"));
+  const slug = str(formData.get("slug"));
+  await withTenant(session.organizationId, (tx) =>
+    tx.update(t.kbArticles).set({ verifiedAt: null }).where(eq(t.kbArticles.id, id))
+  );
+  await audit(session.userId, "UNVERIFY", "KbArticle", id);
+  revalidatePath(`/kb/${slug}`);
+  revalidatePath("/kb");
+}
+
 export async function kbFeedback(formData: FormData) {
   const session = await requireSession();
   const title = str(formData.get("title"));

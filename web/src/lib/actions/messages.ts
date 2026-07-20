@@ -109,6 +109,160 @@ export async function sendMessage(formData: FormData) {
   revalidatePath("/messages");
 }
 
+// ── M4: thread & group management ────────────────────────────────────────────
+
+/** Creator or ADMIN may manage a group (rename, add/remove people). */
+async function requireGroupManager(tx: TenantDb, conversationId: string, userId: string, role: string) {
+  const conv = await tx.query.conversations.findFirst({ where: eq(t.conversations.id, conversationId) });
+  if (!conv) throw new Error("Conversation not found");
+  if (!conv.isGroup) throw new Error("Only group conversations can be managed");
+  if (conv.createdById !== userId && role !== "ADMIN") throw new Error("Only the group creator (or an admin) can do that");
+  return conv;
+}
+
+/** Rename a group conversation. */
+export async function renameConversation(formData: FormData) {
+  const session = await requireSession();
+  const conversationId = str(formData, "conversationId");
+  const title = str(formData, "title");
+  if (!conversationId || !title) return;
+  await withTenant(session.organizationId, async (tx) => {
+    await requireGroupManager(tx, conversationId, session.userId, session.role);
+    await tx.update(t.conversations).set({ title }).where(eq(t.conversations.id, conversationId));
+    await tx.insert(t.messages).values({
+      conversationId,
+      senderId: session.userId,
+      body: `— renamed the group to “${title}” —`,
+    });
+  });
+  revalidatePath(`/messages/${conversationId}`);
+  revalidatePath("/messages");
+}
+
+/** Add a teammate to a group. */
+export async function addParticipant(formData: FormData) {
+  const session = await requireSession();
+  const conversationId = str(formData, "conversationId");
+  const userId = str(formData, "userId");
+  if (!conversationId || !userId) return;
+  const added = await withTenant(session.organizationId, async (tx) => {
+    await requireGroupManager(tx, conversationId, session.userId, session.role);
+    const [existing] = await tx
+      .select({ id: t.conversationParticipants.id })
+      .from(t.conversationParticipants)
+      .where(and(eq(t.conversationParticipants.conversationId, conversationId), eq(t.conversationParticipants.userId, userId)));
+    if (existing) return null;
+    const user = await tx.query.users.findFirst({ where: eq(t.users.id, userId) });
+    if (!user) throw new Error("User not found");
+    await tx.insert(t.conversationParticipants).values({ conversationId, userId });
+    await tx.insert(t.messages).values({
+      conversationId,
+      senderId: session.userId,
+      body: `— added ${user.name} to the group —`,
+    });
+    return user;
+  });
+  if (added) await notify(userId, `💬 Added to a group by ${session.name}`, added.name, `/messages/${conversationId}`);
+  revalidatePath(`/messages/${conversationId}`);
+  revalidatePath("/messages");
+}
+
+/** Remove a participant from a group (creator/admin; use Leave for yourself). */
+export async function removeParticipant(formData: FormData) {
+  const session = await requireSession();
+  const conversationId = str(formData, "conversationId");
+  const userId = str(formData, "userId");
+  if (!conversationId || !userId || userId === session.userId) return;
+  await withTenant(session.organizationId, async (tx) => {
+    await requireGroupManager(tx, conversationId, session.userId, session.role);
+    const user = await tx.query.users.findFirst({ where: eq(t.users.id, userId) });
+    await tx
+      .delete(t.conversationParticipants)
+      .where(and(eq(t.conversationParticipants.conversationId, conversationId), eq(t.conversationParticipants.userId, userId)));
+    await tx.insert(t.messages).values({
+      conversationId,
+      senderId: session.userId,
+      body: `— removed ${user?.name ?? "a participant"} from the group —`,
+    });
+  });
+  revalidatePath(`/messages/${conversationId}`);
+  revalidatePath("/messages");
+}
+
+/** Leave a group conversation yourself. */
+export async function leaveConversation(formData: FormData) {
+  const session = await requireSession();
+  const conversationId = str(formData, "conversationId");
+  if (!conversationId) return;
+  await withTenant(session.organizationId, async (tx) => {
+    const conv = await tx.query.conversations.findFirst({ where: eq(t.conversations.id, conversationId) });
+    if (!conv?.isGroup) throw new Error("You can only leave group conversations — archive 1:1 threads instead");
+    await tx.insert(t.messages).values({
+      conversationId,
+      senderId: session.userId,
+      body: `— ${session.name} left the group —`,
+    });
+    await tx
+      .delete(t.conversationParticipants)
+      .where(and(eq(t.conversationParticipants.conversationId, conversationId), eq(t.conversationParticipants.userId, session.userId)));
+  });
+  revalidatePath("/messages");
+  redirect("/messages");
+}
+
+/** Archive a thread for THIS user only (per-user hide, never global). */
+export async function archiveThread(formData: FormData) {
+  const session = await requireSession();
+  const conversationId = str(formData, "conversationId");
+  if (!conversationId) return;
+  await withTenant(session.organizationId, (tx) =>
+    tx
+      .update(t.conversationParticipants)
+      .set({ archivedAt: new Date() })
+      .where(and(eq(t.conversationParticipants.conversationId, conversationId), eq(t.conversationParticipants.userId, session.userId)))
+  );
+  revalidatePath("/messages");
+  redirect("/messages");
+}
+
+export async function unarchiveThread(formData: FormData) {
+  const session = await requireSession();
+  const conversationId = str(formData, "conversationId");
+  if (!conversationId) return;
+  await withTenant(session.organizationId, (tx) =>
+    tx
+      .update(t.conversationParticipants)
+      .set({ archivedAt: null })
+      .where(and(eq(t.conversationParticipants.conversationId, conversationId), eq(t.conversationParticipants.userId, session.userId)))
+  );
+  revalidatePath("/messages");
+}
+
+/** Grace window for taking back a mis-send. */
+const DELETE_GRACE_MS = 15 * 60 * 1000;
+
+/** Soft-delete your own message within 15 minutes (admins: any time).
+ *  Renders as a "message removed" placeholder — no silent history rewrites. */
+export async function deleteOwnMessage(formData: FormData) {
+  const session = await requireSession();
+  const messageId = str(formData, "messageId");
+  if (!messageId) return;
+  const conversationId = await withTenant(session.organizationId, async (tx) => {
+    const msg = await tx.query.messages.findFirst({ where: eq(t.messages.id, messageId) });
+    if (!msg || msg.deletedAt) return null;
+    const isOwn = msg.senderId === session.userId;
+    const inGrace = Date.now() - msg.createdAt.getTime() <= DELETE_GRACE_MS;
+    if (!(session.role === "ADMIN" || (isOwn && inGrace))) {
+      throw new Error("You can only remove your own messages within 15 minutes of sending");
+    }
+    await tx.update(t.messages).set({ deletedAt: new Date() }).where(eq(t.messages.id, messageId));
+    return msg.conversationId;
+  });
+  if (!conversationId) return;
+  revalidatePath(`/messages/${conversationId}`);
+  revalidatePath("/messages");
+}
+
 /** Mark a conversation read for the current user. */
 export async function markConversationRead(conversationId: string) {
   const session = await requireSession();

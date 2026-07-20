@@ -390,6 +390,173 @@ export async function cancelInspection(formData: FormData) {
   revalidatePath(`/compliance/inspections/${inspectionId}`);
 }
 
+// ── M4: template management (edit / deactivate) ──────────────────────────────
+
+/** Edit a template — the run page's "edit the template on the Compliance page"
+ *  hint finally points at something real. Steps re-parse only when provided. */
+export async function updateTemplate(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "compliance.manage")) throw new Error("Not allowed");
+  const templateId = str(formData, "templateId");
+  const name = str(formData, "name");
+  if (!templateId || !name) return;
+  const rawSteps = str(formData, "steps");
+  const certValidityDays = parseInt(str(formData, "certValidityDays"), 10);
+
+  const tpl = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.inspectionTemplates.findFirst({ where: eq(t.inspectionTemplates.id, templateId) });
+    if (!existing) return null;
+    await tx
+      .update(t.inspectionTemplates)
+      .set({
+        name,
+        description: optStr(formData, "description"),
+        issuesCertification: optStr(formData, "issuesCertification"),
+        certValidityDays: Number.isFinite(certValidityDays) && certValidityDays > 0 ? certValidityDays : null,
+        ...(rawSteps ? { steps: parseSteps(rawSteps) } : {}),
+      })
+      .where(eq(t.inspectionTemplates.id, templateId));
+    return existing;
+  });
+  if (!tpl) return;
+  await audit(session.userId, "UPDATE", "InspectionTemplate", templateId, { name, stepsReplaced: Boolean(rawSteps) });
+  revalidatePath("/compliance");
+}
+
+/** Deactivate/reactivate a template (past inspections keep referencing it). */
+export async function toggleTemplateActive(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "compliance.manage")) throw new Error("Not allowed");
+  const templateId = str(formData, "templateId");
+  const next = str(formData, "next") === "true";
+  if (!templateId) return;
+  await withTenant(session.organizationId, (tx) =>
+    tx.update(t.inspectionTemplates).set({ active: next }).where(eq(t.inspectionTemplates.id, templateId))
+  );
+  await audit(session.userId, "UPDATE", "InspectionTemplate", templateId, { active: next });
+  revalidatePath("/compliance");
+}
+
+// ── M4: inspection reschedule / reassign / reopen ────────────────────────────
+
+/** Move an open inspection to a new time and/or inspector. */
+export async function rescheduleInspection(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "compliance.manage")) throw new Error("Not allowed");
+  const inspectionId = str(formData, "inspectionId");
+  const when = optDate(formData, "scheduledAt");
+  if (!inspectionId || !when) return;
+  const inspectorId = optStr(formData, "inspectorId");
+
+  const row = await withTenant(session.organizationId, async (tx) => {
+    const row = await tx.query.inspections.findFirst({
+      where: eq(t.inspections.id, inspectionId),
+      with: { template: true },
+    });
+    if (!row) throw new Error("Inspection not found");
+    if (row.status !== "SCHEDULED" && row.status !== "IN_PROGRESS")
+      throw new Error(`Cannot reschedule a ${row.status} inspection`);
+    await tx
+      .update(t.inspections)
+      .set({ scheduledAt: when, inspectorId })
+      .where(eq(t.inspections.id, inspectionId));
+    return row;
+  });
+  if (inspectorId && inspectorId !== row.inspectorId) {
+    await notify(inspectorId, "🔍 Inspection assigned to you", `${row.template.name} — ${when.toLocaleString()}`, "/compliance");
+  }
+  await audit(session.userId, "INSPECTION_RESCHEDULED", "Inspection", inspectionId, {
+    scheduledAt: when.toISOString(),
+    inspectorId,
+  });
+  revalidatePath("/compliance");
+  revalidatePath(`/compliance/inspections/${inspectionId}`);
+}
+
+/** Reopen a CANCELLED inspection back onto the schedule. */
+export async function reopenInspection(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "compliance.manage")) throw new Error("Not allowed");
+  const inspectionId = str(formData, "inspectionId");
+  if (!inspectionId) return;
+  const row = await withTenant(session.organizationId, async (tx) => {
+    const row = await tx.query.inspections.findFirst({
+      where: eq(t.inspections.id, inspectionId),
+      with: { template: true },
+    });
+    if (!row) throw new Error("Inspection not found");
+    if (row.status !== "CANCELLED") throw new Error("Only cancelled inspections can be reopened");
+    await tx.update(t.inspections).set({ status: "SCHEDULED" }).where(eq(t.inspections.id, inspectionId));
+    return row;
+  });
+  await audit(session.userId, "INSPECTION_REOPENED", "Inspection", inspectionId, { template: row.template.name });
+  revalidatePath("/compliance");
+  revalidatePath(`/compliance/inspections/${inspectionId}`);
+}
+
+// ── M4: certification edit / renew / revoke ──────────────────────────────────
+
+/** Edit a certification — setting a new expiry IS the renewal. */
+export async function updateCertification(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "compliance.manage")) throw new Error("Not allowed");
+  const certId = str(formData, "certId");
+  const name = str(formData, "name");
+  if (!certId || !name) return;
+
+  const cert = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.certifications.findFirst({ where: eq(t.certifications.id, certId) });
+    if (!existing) return null;
+    const expiresAt = optDate(formData, "expiresAt");
+    await tx
+      .update(t.certifications)
+      .set({
+        name,
+        certificateNumber: optStr(formData, "certificateNumber"),
+        issuingAuthority: optStr(formData, "issuingAuthority"),
+        issuedAt: optDate(formData, "issuedAt"),
+        expiresAt,
+        notes: optStr(formData, "notes"),
+        // A pushed-out expiry restarts the renewal-notification cycle.
+        ...(expiresAt && existing.expiresAt && expiresAt > existing.expiresAt ? { renewalNotifiedAt: null } : {}),
+      })
+      .where(eq(t.certifications.id, certId));
+    return existing;
+  });
+  if (!cert) return;
+  await audit(session.userId, "UPDATE", "Certification", certId, { name });
+  revalidatePath("/compliance");
+}
+
+/** Revoke — expires the certification immediately (kept on record, audited). */
+export async function revokeCertification(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "compliance.manage")) throw new Error("Not allowed");
+  const certId = str(formData, "certId");
+  const reason = str(formData, "reason");
+  if (!certId) return;
+  if (!reason) throw new Error("A revocation reason is required");
+
+  const cert = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.certifications.findFirst({ where: eq(t.certifications.id, certId) });
+    if (!existing) return null;
+    await tx
+      .update(t.certifications)
+      .set({
+        expiresAt: new Date(),
+        notes: existing.notes ? `${existing.notes}\n[REVOKED: ${reason}]` : `[REVOKED: ${reason}]`,
+      })
+      .where(eq(t.certifications.id, certId));
+    return existing;
+  });
+  if (!cert) return;
+  if (cert.userId) {
+    await notify(cert.userId, `⛔ Certification revoked: ${cert.name}`, reason, "/compliance");
+  }
+  await audit(session.userId, "CERT_REVOKED", "Certification", certId, { name: cert.name, reason });
+  revalidatePath("/compliance");
+}
+
 // ── Certifications ───────────────────────────────────────────────────────────
 
 export async function addCertification(formData: FormData) {
@@ -399,9 +566,13 @@ export async function addCertification(formData: FormData) {
   const name = str(formData, "name");
   if (!name) throw new Error("Certification name is required");
   const holderType = str(formData, "holderType");
-  if (holderType !== "USER" && holderType !== "ORGANIZATION") throw new Error("Invalid holder type");
+  // M4: EQUIPMENT holders supported end-to-end (schema always allowed it).
+  if (holderType !== "USER" && holderType !== "ORGANIZATION" && holderType !== "EQUIPMENT")
+    throw new Error("Invalid holder type");
   const userId = holderType === "USER" ? optStr(formData, "userId") : null;
   if (holderType === "USER" && !userId) throw new Error("Pick the user who holds this certification");
+  const equipmentId = holderType === "EQUIPMENT" ? optStr(formData, "equipmentId") : null;
+  if (holderType === "EQUIPMENT" && !equipmentId) throw new Error("Pick the equipment this certification covers");
 
   const [cert] = await withTenant(session.organizationId, (tx) =>
     tx
@@ -410,6 +581,7 @@ export async function addCertification(formData: FormData) {
         name,
         holderType,
         userId,
+        equipmentId,
         certificateNumber: optStr(formData, "certificateNumber"),
         issuingAuthority: optStr(formData, "issuingAuthority"),
         issuedAt: optDate(formData, "issuedAt"),

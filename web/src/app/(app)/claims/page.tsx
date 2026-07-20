@@ -25,7 +25,7 @@ import {
 } from "@/components/ui";
 import { Forbidden } from "@/components/sales/meta";
 import { CLAIM_STATUSES, OPEN_CLAIM_STATUSES, claimStatusTone } from "@/components/claims/meta";
-import { createAdjuster, createCarrier, createClaim } from "@/lib/actions/claims";
+import { createAdjuster, createCarrier, createClaim, updateAdjuster, updateCarrier } from "@/lib/actions/claims";
 import { clsx } from "@/lib/clsx";
 
 export const dynamic = "force-dynamic";
@@ -321,12 +321,38 @@ export default async function ClaimsPage({ searchParams }: { searchParams: { sta
                               👤 {a.name}
                               {a.phone ? ` · ${a.phone}` : ""}
                               {a.notes ? <span className="text-slate-400"> — {a.notes}</span> : null}
+                              {/* M5: adjuster edit */}
+                              <details className="ml-4">
+                                <summary className="cursor-pointer text-[11px] font-medium text-blue-600">✏️ Edit adjuster</summary>
+                                <form action={updateAdjuster} className="mt-1 flex flex-wrap items-end gap-1.5">
+                                  <input type="hidden" name="adjusterId" value={a.id} />
+                                  <Input name="name" required defaultValue={a.name} aria-label="Name" className="h-8 w-32 text-xs" />
+                                  <Input name="phone" defaultValue={a.phone ?? ""} placeholder="phone" aria-label="Phone" className="h-8 w-28 text-xs" />
+                                  <Input name="email" defaultValue={a.email ?? ""} placeholder="email" aria-label="Email" className="h-8 w-36 text-xs" />
+                                  <Input name="notes" defaultValue={a.notes ?? ""} placeholder="notes" aria-label="Notes" className="h-8 w-32 text-xs" />
+                                  <Button type="submit" size="sm" variant="secondary">Save</Button>
+                                </form>
+                              </details>
                             </li>
                           ))}
                         </ul>
                       ) : (
                         <div className="mt-1 text-xs text-slate-400">No adjusters on file</div>
                       )}
+                      {/* M5: carrier edit — a typo'd portal URL is no longer permanent */}
+                      <details className="mt-1.5">
+                        <summary className="cursor-pointer text-[11px] font-medium text-blue-600">✏️ Edit carrier</summary>
+                        <form action={updateCarrier} className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
+                          <input type="hidden" name="carrierId" value={c.id} />
+                          <Input name="name" required defaultValue={c.name} aria-label="Name" className="h-8 text-xs" />
+                          <Input name="phone" defaultValue={c.phone ?? ""} placeholder="phone" aria-label="Phone" className="h-8 text-xs" />
+                          <Input name="email" defaultValue={c.email ?? ""} placeholder="email" aria-label="Email" className="h-8 text-xs" />
+                          <Input name="claimsPortalUrl" defaultValue={c.claimsPortalUrl ?? ""} placeholder="claims portal URL" aria-label="Portal URL" className="h-8 text-xs" />
+                          <div className="sm:col-span-2">
+                            <Button type="submit" size="sm" variant="secondary">Save carrier</Button>
+                          </div>
+                        </form>
+                      </details>
                     </li>
                   ))}
                 </ul>

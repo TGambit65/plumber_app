@@ -458,6 +458,103 @@ export async function inviteUser(formData: FormData) {
   revalidatePath("/settings");
 }
 
+// ── M5: user identity + password + org profile ───────────────────────────────
+
+/** Edit a user's name/email/phone — a misspelled invite is no longer permanent. */
+export async function updateUserProfile(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "users.manage")) throw new Error("Not allowed");
+  const userId = str(formData, "userId");
+  const name = str(formData, "name");
+  const email = str(formData, "email").toLowerCase();
+  if (!userId || !name || !email) return;
+  const user = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.users.findFirst({ where: eq(t.users.id, userId) });
+    if (!existing) return null;
+    await tx
+      .update(t.users)
+      .set({ name, email, phone: str(formData, "phone") || null })
+      .where(eq(t.users.id, userId));
+    return existing;
+  });
+  if (!user) return;
+  await audit(session.userId, "UPDATE", "User", userId, {
+    name,
+    emailChanged: user.email !== email,
+  });
+  revalidatePath("/settings");
+}
+
+/** Admin password reset — sets a temp password the user should change. */
+export async function resetUserPassword(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "users.manage")) throw new Error("Not allowed");
+  const userId = str(formData, "userId");
+  const password = str(formData, "password");
+  if (!userId || password.length < 8) throw new Error("Temp password must be at least 8 characters");
+  const passwordHash = await bcrypt.hash(password, 10);
+  const user = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.query.users.findFirst({ where: eq(t.users.id, userId) });
+    if (!existing) return null;
+    await tx.update(t.users).set({ passwordHash }).where(eq(t.users.id, userId));
+    return existing;
+  });
+  if (!user) return;
+  await audit(session.userId, "PASSWORD_RESET", "User", userId, { byAdmin: true });
+  await notify(userId, "🔑 Your password was reset by an admin", "Sign in with the temp password you were given and change it.", "/settings");
+  revalidatePath("/settings");
+}
+
+/** Assign (or clear) a user's truck — drives inventoryLocations.userId. */
+export async function assignTruck(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "users.manage")) throw new Error("Not allowed");
+  const userId = str(formData, "userId");
+  const locationId = str(formData, "locationId"); // "" = unassign
+  if (!userId) return;
+  await withTenant(session.organizationId, async (tx) => {
+    // Clear this user's current truck first (user_id is unique).
+    await tx.update(t.inventoryLocations).set({ userId: null }).where(eq(t.inventoryLocations.userId, userId));
+    if (locationId) {
+      const loc = await tx.query.inventoryLocations.findFirst({ where: eq(t.inventoryLocations.id, locationId) });
+      if (!loc || loc.kind !== "TRUCK") throw new Error("Pick a TRUCK location");
+      await tx.update(t.inventoryLocations).set({ userId }).where(eq(t.inventoryLocations.id, locationId));
+    }
+  });
+  await audit(session.userId, "TRUCK_ASSIGNED", "User", userId, { locationId: locationId || null });
+  if (locationId) await notify(userId, "🚚 Truck assigned to you", "Your truck stock is ready under Inventory.", "/inventory");
+  revalidatePath("/settings");
+  revalidatePath("/inventory");
+}
+
+/** The Company tab finally writes real data (slug stays immutable — it lives
+ *  in webhook + calendar-feed URLs). */
+export async function updateOrganization(formData: FormData) {
+  const session = await requireSession();
+  if (session.role !== "ADMIN") throw new Error("Only admins can edit the company profile");
+  const name = str(formData, "name");
+  if (!name) return;
+  const brandPrimary = str(formData, "brandPrimary");
+  await withTenant(session.organizationId, (tx) =>
+    tx
+      .update(t.organizations)
+      .set({
+        name,
+        brandPrimary: /^#[0-9a-fA-F]{6}$/.test(brandPrimary) ? brandPrimary : undefined,
+        businessPhone: str(formData, "businessPhone") || null,
+        businessEmail: str(formData, "businessEmail") || null,
+        businessAddress: str(formData, "businessAddress") || null,
+        licenseNumber: str(formData, "licenseNumber") || null,
+        serviceArea: str(formData, "serviceArea") || null,
+        hoursOfOperation: str(formData, "hoursOfOperation") || null,
+      })
+      .where(eq(t.organizations.id, session.organizationId))
+  );
+  await audit(session.userId, "ORG_UPDATED", "Organization", session.organizationId, { name });
+  revalidatePath("/settings");
+  revalidatePath("/", "layout");
+}
+
 export async function toggleUserActive(formData: FormData) {
   const session = await requireSession();
   if (!can(session.role, "users.manage")) throw new Error("Not allowed");

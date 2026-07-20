@@ -59,7 +59,7 @@ export const locationKindEnum = pgEnum("location_kind", ["WAREHOUSE", "TRUCK"]);
 export const partRequestStatusEnum = pgEnum("part_request_status", [
   "OPEN", "ORDERED", "FULFILLED", "CANCELLED",
 ]);
-export const poStatusEnum = pgEnum("po_status", ["DRAFT", "SENT", "PARTIAL", "RECEIVED", "BILLED"]);
+export const poStatusEnum = pgEnum("po_status", ["DRAFT", "SENT", "PARTIAL", "RECEIVED", "BILLED", "CANCELLED"]);
 export const commissionKindEnum = pgEnum("commission_kind", [
   "PERCENT_REVENUE", "PERCENT_MARGIN", "SPIFF",
 ]);
@@ -541,6 +541,8 @@ export const kbArticles = pgTable(
     authorId: text("author_id").notNull().references(() => users.id),
     verifiedAt: timestamp("verified_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Soft archive (M4) — unpublished; hidden from the KB list + search, restorable. */
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (tb) => ({
@@ -834,6 +836,8 @@ export const conversationParticipants = pgTable(
     conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     lastReadAt: timestamp("last_read_at", { withTimezone: true }),
+    /** Per-user thread archive (M4) — hides the thread for THIS user only. */
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
   },
   (tb) => ({
     convUser: uniqueIndex("conversation_participants_conv_user_idx").on(tb.conversationId, tb.userId),
@@ -846,6 +850,8 @@ export const messages = pgTable("messages", {
   conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
   senderId: text("sender_id").notNull().references(() => users.id),
   body: text("body").notNull(),
+  /** Soft delete (M4) — renders as a "message removed" placeholder. */
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -880,6 +886,13 @@ export const organizations = pgTable("organizations", {
   ssoClientId: text("sso_client_id"),
   ssoClientSecret: text("sso_client_secret"),
   brandPrimary: text("brand_primary").default("#0057FF"),
+  // M5: real company profile (Settings → Company stops being hardcoded JSX).
+  businessPhone: text("business_phone"),
+  businessEmail: text("business_email"),
+  businessAddress: text("business_address"),
+  licenseNumber: text("license_number"),
+  serviceArea: text("service_area"),
+  hoursOfOperation: text("hours_of_operation"),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

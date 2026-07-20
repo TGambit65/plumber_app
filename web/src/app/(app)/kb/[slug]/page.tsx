@@ -2,11 +2,19 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
-import { and, desc, eq, ne } from "drizzle-orm";
-import { Badge, Button, Card, CardBody, CardHeader } from "@/components/ui";
+import { and, desc, eq, isNull, ne } from "drizzle-orm";
+import { Badge, Button, Card, CardBody, CardHeader, Field, Input, Select, Textarea } from "@/components/ui";
+import { can } from "@/lib/permissions";
 import { fmtDate, timeAgo } from "@/lib/format";
 import { Markdown, snippet } from "@/lib/markdown";
-import { kbFeedback, markKbVerified } from "@/lib/actions/shared";
+import {
+  archiveKbArticle,
+  kbFeedback,
+  markKbVerified,
+  unarchiveKbArticle,
+  unverifyKbArticle,
+  updateKbArticle,
+} from "@/lib/actions/shared";
 
 export const dynamic = "force-dynamic";
 
@@ -46,7 +54,7 @@ export default async function KbArticlePage({
 
   const related = await withTenant(session.organizationId, (tx) =>
     tx.query.kbArticles.findMany({
-      where: and(eq(t.kbArticles.category, article.category), ne(t.kbArticles.id, article.id)),
+      where: and(eq(t.kbArticles.category, article.category), ne(t.kbArticles.id, article.id), isNull(t.kbArticles.archivedAt)),
       orderBy: [desc(t.kbArticles.updatedAt)],
       limit: 3,
     })
@@ -95,14 +103,83 @@ export default async function KbArticlePage({
             </div>
           ) : null}
 
-          {session.role === "ADMIN" && !article.verifiedAt ? (
-            <form action={markKbVerified} className="mt-4">
-              <input type="hidden" name="id" value={article.id} />
-              <input type="hidden" name="slug" value={article.slug} />
-              <Button type="submit" variant="success" size="sm">
-                ✓ Mark verified today
-              </Button>
-            </form>
+          {article.archivedAt ? (
+            <div className="mt-4 flex flex-wrap items-center gap-3 rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700">
+              <span>📦 Unpublished {fmtDate(article.archivedAt)} — hidden from the KB list and search.</span>
+              {can(session.role, "kb.author") ? (
+                <form action={unarchiveKbArticle}>
+                  <input type="hidden" name="id" value={article.id} />
+                  <Button type="submit" size="sm" variant="secondary">
+                    ♻️ Republish
+                  </Button>
+                </form>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {session.role === "ADMIN" && !article.verifiedAt ? (
+              <form action={markKbVerified}>
+                <input type="hidden" name="id" value={article.id} />
+                <input type="hidden" name="slug" value={article.slug} />
+                <Button type="submit" variant="success" size="sm">
+                  ✓ Mark verified today
+                </Button>
+              </form>
+            ) : null}
+            {session.role === "ADMIN" && article.verifiedAt ? (
+              <form action={unverifyKbArticle}>
+                <input type="hidden" name="id" value={article.id} />
+                <input type="hidden" name="slug" value={article.slug} />
+                <Button type="submit" variant="ghost" size="sm" title="Flags this article as needing re-review">
+                  ↩ Un-verify (needs re-review)
+                </Button>
+              </form>
+            ) : null}
+            {can(session.role, "kb.author") && !article.archivedAt ? (
+              <form action={archiveKbArticle}>
+                <input type="hidden" name="id" value={article.id} />
+                <Button type="submit" variant="ghost" size="sm" title="Unpublishes the article — reversible any time">
+                  📦 Unpublish
+                </Button>
+              </form>
+            ) : null}
+          </div>
+
+          {/* M4: edit the article — editing clears verification (stale content must be re-reviewed) */}
+          {can(session.role, "kb.author") ? (
+            <details className="mt-4 rounded-lg border border-slate-200">
+              <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-blue-600">✏️ Edit article</summary>
+              <form action={updateKbArticle} className="space-y-3 border-t border-slate-100 p-4">
+                <input type="hidden" name="id" value={article.id} />
+                <Field label="Title">
+                  <Input name="title" required defaultValue={article.title} />
+                </Field>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Category">
+                    <Select name="category" defaultValue={article.category}>
+                      {Object.keys(CAT_LABEL).map((c) => (
+                        <option key={c} value={c}>
+                          {CAT_LABEL[c]}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label="Tags (comma-separated)">
+                    <Input name="tags" defaultValue={article.tags.join(", ")} />
+                  </Field>
+                </div>
+                <Field label="Body (markdown)">
+                  <Textarea name="body" rows={14} required defaultValue={article.body} />
+                </Field>
+                <div className="flex items-center gap-3">
+                  <Button type="submit" size="sm">
+                    Save article
+                  </Button>
+                  <span className="text-[11px] text-slate-400">Saving updates “last updated” and clears verification.</span>
+                </div>
+              </form>
+            </details>
           ) : null}
 
           <hr className="my-5 border-slate-100" />

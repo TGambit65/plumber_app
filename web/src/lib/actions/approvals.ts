@@ -346,6 +346,81 @@ export async function approveOutbound(formData: FormData) {
   revalidatePath("/approvals");
 }
 
+// ── M4: requester-side management + bulk approve ─────────────────────────────
+
+/** Withdraw your OWN pending request (the CANCELLED enum finally gets a path). */
+export async function withdrawOutbound(formData: FormData) {
+  const session = await requireSession();
+  const id = str(formData, "id");
+  if (!id) return;
+  const row = await withTenant(session.organizationId, async (tx) => {
+    const row = await tx.query.outboundMessages.findFirst({ where: eq(t.outboundMessages.id, id) });
+    if (!row) throw new Error("Outbound message not found");
+    if (row.requestedById !== session.userId && session.role !== "ADMIN") {
+      throw new Error("You can only withdraw your own requests");
+    }
+    if (row.status !== "PENDING_APPROVAL") throw new Error("This request has already been decided.");
+    await tx
+      .update(t.outboundMessages)
+      .set({ status: "CANCELLED", decidedAt: new Date() })
+      .where(eq(t.outboundMessages.id, id));
+    return row;
+  });
+  await audit(session.userId, "WITHDRAW_OUTBOUND", "OutboundMessage", row.id, { kind: row.kind });
+  revalidatePath("/approvals");
+}
+
+/** Edit the subject/body of your OWN request while it's still pending. */
+export async function updateOutbound(formData: FormData) {
+  const session = await requireSession();
+  const id = str(formData, "id");
+  const body = str(formData, "body");
+  if (!id || !body) return;
+  const row = await withTenant(session.organizationId, async (tx) => {
+    const row = await tx.query.outboundMessages.findFirst({ where: eq(t.outboundMessages.id, id) });
+    if (!row) throw new Error("Outbound message not found");
+    if (row.requestedById !== session.userId && session.role !== "ADMIN") {
+      throw new Error("You can only edit your own requests");
+    }
+    if (row.status !== "PENDING_APPROVAL") throw new Error("This request has already been decided.");
+    await tx
+      .update(t.outboundMessages)
+      .set({ body, subject: str(formData, "subject") || row.subject })
+      .where(eq(t.outboundMessages.id, id));
+    return row;
+  });
+  await audit(session.userId, "UPDATE", "OutboundMessage", row.id, { kind: row.kind });
+  revalidatePath("/approvals");
+}
+
+/** Bulk-approve the low-risk queue: every pending FOLLOW_UP_TOUCH at once.
+ *  (Estimates, customer messages and licensed sign-offs stay one-by-one.) */
+export async function bulkApproveFollowUps() {
+  const session = await requireSession();
+  if (!can(session.role, "approvals.manage")) throw new Error("Not allowed");
+
+  const rows = await withTenant(session.organizationId, (tx) =>
+    tx.query.outboundMessages.findMany({
+      where: and(eq(t.outboundMessages.kind, "FOLLOW_UP_TOUCH"), eq(t.outboundMessages.status, "PENDING_APPROVAL")),
+    })
+  );
+  for (const row of rows) {
+    if (row.followUpId) await reallySendFollowUp(session.organizationId, row.followUpId, row.requestedById);
+    await withTenant(session.organizationId, (tx) =>
+      tx
+        .update(t.outboundMessages)
+        .set({ status: "APPROVED_SENT", approvedById: session.userId, decidedAt: new Date() })
+        .where(eq(t.outboundMessages.id, row.id))
+    );
+    await notify(row.requestedById, "✅ Follow-up touch approved & sent", `${session.name} bulk-approved the follow-up queue.`, "/approvals");
+  }
+  await audit(session.userId, "BULK_APPROVE_OUTBOUND", "OutboundMessage", undefined, {
+    kind: "FOLLOW_UP_TOUCH",
+    count: rows.length,
+  });
+  revalidatePath("/approvals");
+}
+
 /** Reject — reason required, notify requester, no effect executed. */
 export async function rejectOutbound(formData: FormData) {
   const session = await requireSession();

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
-import { and, desc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, or, sql, type SQL, isNull } from "drizzle-orm";
 import {
   Badge,
   Button,
@@ -93,6 +93,8 @@ export default async function KbPage({
   const storeHealth = await store.health();
 
   const conds: SQL[] = [];
+  // M4: unpublished (archived) articles never appear in the list or search.
+  conds.push(isNull(t.kbArticles.archivedAt));
   if (q) {
     const like = `%${q}%`;
     conds.push(
