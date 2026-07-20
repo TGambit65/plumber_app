@@ -2,7 +2,7 @@ import Link from "next/link";
 import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
-import { and, desc, eq, ilike, or, sql, type SQL, isNull } from "drizzle-orm";
+import { and, desc, eq, ilike, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import {
   Badge,
   Button,
@@ -83,7 +83,7 @@ function ArticleCard({ article }: { article: Article }) {
 export default async function KbPage({
   searchParams,
 }: {
-  searchParams: { q?: string; cat?: string; suggested?: string };
+  searchParams: { q?: string; cat?: string; suggested?: string; archived?: string };
 }) {
   const session = await requireSession();
   const q = (searchParams.q ?? "").trim();
@@ -93,8 +93,8 @@ export default async function KbPage({
   const storeHealth = await store.health();
 
   const conds: SQL[] = [];
-  // M4: unpublished (archived) articles never appear in the list or search.
-  conds.push(isNull(t.kbArticles.archivedAt));
+  // M4: unpublished articles are hidden; M6: ?archived=1 shows ONLY them.
+  conds.push(searchParams.archived === "1" ? isNotNull(t.kbArticles.archivedAt) : isNull(t.kbArticles.archivedAt));
   if (q) {
     const like = `%${q}%`;
     conds.push(
@@ -131,12 +131,19 @@ export default async function KbPage({
       ) : null}
 
       {/* Search + category chips */}
-      <form method="GET" action="/kb" className="mb-3 flex gap-2">
+      <form method="GET" action="/kb" className="mb-3 flex flex-wrap items-center gap-2">
         {cat ? <input type="hidden" name="cat" value={cat} /> : null}
         <Input name="q" defaultValue={q} placeholder="Search SOPs, policies, equipment notes…" className="max-w-md" />
         <Button type="submit" variant="secondary">
           Search
         </Button>
+        {/* M6: unpublished articles get their own view + restore path */}
+        <Link
+          href={searchParams.archived === "1" ? "/kb" : "/kb?archived=1"}
+          className="rounded-full border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+        >
+          {searchParams.archived === "1" ? "← Back to published articles" : "📦 Show unpublished"}
+        </Link>
       </form>
       <div className="mb-3">
         {storeHealth.degraded ? (

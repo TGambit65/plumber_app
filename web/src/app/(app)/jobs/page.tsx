@@ -19,6 +19,8 @@ import {
   statusLabel,
 } from "@/components/ui";
 import { priorityTone } from "@/components/office/job-card";
+import { can } from "@/lib/permissions";
+import { bulkArchiveJobs } from "@/lib/actions/jobs";
 import { fmtDateTime } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -50,6 +52,8 @@ export default async function JobsPage({
     const cond = or(ilike(t.jobs.number, like), ilike(t.jobs.jobType, like), ilike(t.customers.name, like));
     if (cond) conds.push(cond);
   }
+
+  const canBulk = can(session.role, "dispatch.manage") && !showArchived;
 
   const [techs, rows] = await withTenant(session.organizationId, (tx) =>
     Promise.all([
@@ -121,11 +125,33 @@ export default async function JobsPage({
         <EmptyState title="No jobs match" hint="Try clearing filters, or book a job from the dispatch board." />
       ) : (
         <Card>
+          {/* M6: bulk archive — closed jobs only; open selections are skipped with a note */}
+          {canBulk ? (
+            <form id="bulk-jobs" action={bulkArchiveJobs} className="flex items-center gap-2 border-b border-slate-100 px-4 py-2">
+              <Button type="submit" size="sm" variant="secondary" title="Archives every selected COMPLETED/CANCELLED job — open jobs are skipped">
+                📦 Archive selected
+              </Button>
+              <span className="text-[11px] text-slate-400">Tick closed jobs below, then archive them in one go.</span>
+            </form>
+          ) : null}
           <Table>
-            <THead cols={["Number", "Type", "Customer", "City", "Tech", "Scheduled", "Status", "Priority"]} />
+            <THead cols={canBulk ? ["", "Number", "Type", "Customer", "City", "Tech", "Scheduled", "Status", "Priority"] : ["Number", "Type", "Customer", "City", "Tech", "Scheduled", "Status", "Priority"]} />
             <tbody>
               {rows.map(({ job, customer, property, tech }) => (
                 <TRow key={job.id}>
+                  {canBulk ? (
+                    <TCell>
+                      <input
+                        type="checkbox"
+                        name="ids"
+                        value={job.id}
+                        form="bulk-jobs"
+                        aria-label={`Select ${job.number}`}
+                        className="h-4 w-4"
+                        disabled={!["COMPLETED", "CANCELLED"].includes(job.status)}
+                      />
+                    </TCell>
+                  ) : null}
                   <TCell>
                     <Link href={`/jobs/${job.id}`} className="font-medium text-blue-700 hover:underline">
                       {job.number}

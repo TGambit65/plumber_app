@@ -565,6 +565,60 @@ export async function sendInvoiceReminder(formData: FormData) {
   revalidatePath("/approvals");
 }
 
+/** M6: bulk payment reminders — queue one approval-gated reminder per selected
+ *  open invoice (already-queued invoices are skipped, never double-queued). */
+export async function bulkInvoiceReminders(formData: FormData) {
+  const session = await guard("invoices.create");
+  const ids = formData.getAll("ids").map((v) => String(v)).filter(Boolean);
+  if (ids.length === 0) return;
+
+  const summary = await withTenant(session.organizationId, async (tx) => {
+    let queued = 0;
+    let skipped = 0;
+    for (const id of ids) {
+      const inv = await tx.query.invoices.findFirst({
+        where: eq(t.invoices.id, id),
+        with: { customer: true, items: true, payments: true },
+      });
+      if (!inv || !["SENT", "PARTIAL", "OVERDUE"].includes(inv.status)) {
+        skipped++;
+        continue;
+      }
+      const subject = `Payment reminder — ${inv.number}`;
+      const existing = await tx.query.outboundMessages.findFirst({
+        where: and(eq(t.outboundMessages.subject, subject), eq(t.outboundMessages.status, "PENDING_APPROVAL")),
+      });
+      if (existing) {
+        skipped++;
+        continue;
+      }
+      const total = inv.items.reduce((s, i) => s + Math.round(i.qty * i.unitPriceCents), 0);
+      const paid = inv.payments.reduce((s, p) => s + p.amountCents, 0);
+      await tx.insert(t.outboundMessages).values({
+        kind: "CUSTOMER_MESSAGE",
+        status: "PENDING_APPROVAL",
+        customerId: inv.customerId,
+        recipient: inv.customer.email ?? inv.customer.phone ?? null,
+        subject,
+        body: `Hi ${inv.customer.name}, a friendly reminder that invoice ${inv.number} has a balance of ${money(total - paid)}${inv.dueAt ? ` (due ${inv.dueAt.toISOString().slice(0, 10)})` : ""}. Pay online any time — thank you!`,
+        requestedById: session.userId,
+      });
+      queued++;
+    }
+    return { queued, skipped };
+  });
+
+  await audit(session.userId, "BULK_REMINDERS_QUEUED", "Invoice", undefined, { ...summary, requested: ids.length });
+  await notify(
+    session.userId,
+    `✉️ ${summary.queued} payment reminder(s) queued for approval`,
+    summary.skipped > 0 ? `${summary.skipped} skipped (not open, or already queued).` : "Approve them in the Approvals queue.",
+    "/approvals"
+  );
+  revalidatePath("/invoices");
+  revalidatePath("/approvals");
+}
+
 /** The correction path: VOID the original (terminal) + duplicate lines as a new DRAFT. */
 export async function voidAndDuplicateInvoice(formData: FormData) {
   const session = await requireSession();

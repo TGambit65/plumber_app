@@ -345,6 +345,28 @@ export async function archiveLead(formData: FormData) {
   redirect("/leads");
 }
 
+/** M6: bulk-archive selected leads (junk sweeps; WON/LOST or open all allowed). */
+export async function bulkArchiveLeads(formData: FormData) {
+  const session = await guard("pipeline.manage");
+  const ids = formData.getAll("ids").map((v) => String(v)).filter(Boolean);
+  if (ids.length === 0) return;
+
+  const archived = await withTenant(session.organizationId, async (tx) => {
+    let n = 0;
+    for (const id of ids) {
+      const lead = await tx.query.leads.findFirst({ where: eq(t.leads.id, id) });
+      if (!lead || lead.archivedAt) continue;
+      await tx.update(t.leads).set({ archivedAt: new Date() }).where(eq(t.leads.id, id));
+      n++;
+    }
+    return n;
+  });
+
+  await audit(session.userId, "LEADS_BULK_ARCHIVED", "Lead", undefined, { archived, requested: ids.length });
+  await notify(session.userId, `📦 ${archived} lead(s) archived`, "Restore any of them from 📦 Show archived.", "/leads");
+  revalidateSales();
+}
+
 export async function unarchiveLead(formData: FormData) {
   const session = await guard("pipeline.manage");
   const leadId = str(formData, "leadId");

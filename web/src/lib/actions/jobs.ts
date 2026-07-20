@@ -278,6 +278,40 @@ export async function archiveJob(formData: FormData) {
   revalidateJobs(jobId);
 }
 
+/** M6: bulk-archive the selected CLOSED jobs (open ones are skipped, counted). */
+export async function bulkArchiveJobs(formData: FormData) {
+  const session = await guardDispatch();
+  const ids = formData.getAll("ids").map((v) => String(v)).filter(Boolean);
+  if (ids.length === 0) return;
+
+  const summary = await withTenant(session.organizationId, async (tx) => {
+    let archived = 0;
+    let skipped = 0;
+    for (const id of ids) {
+      const job = await tx.query.jobs.findFirst({ where: eq(t.jobs.id, id) });
+      if (!job || job.deletedAt || jobArchiveBlocker(job.status as JobStatus)) {
+        skipped++;
+        continue;
+      }
+      await tx
+        .update(t.jobs)
+        .set({ deletedAt: new Date(), deletedById: session.userId, updatedAt: new Date() })
+        .where(eq(t.jobs.id, id));
+      archived++;
+    }
+    return { archived, skipped };
+  });
+
+  await audit(session.userId, "JOBS_BULK_ARCHIVED", "Job", undefined, { ...summary, requested: ids.length });
+  await notify(
+    session.userId,
+    `📦 ${summary.archived} job(s) archived`,
+    summary.skipped > 0 ? `${summary.skipped} skipped — only completed or cancelled jobs archive.` : "All selected jobs archived.",
+    "/jobs"
+  );
+  revalidateJobs();
+}
+
 /** Restore an archived job. */
 export async function unarchiveJob(formData: FormData) {
   const session = await guardDispatch();

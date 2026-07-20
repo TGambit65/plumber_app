@@ -4,7 +4,7 @@ import { and, asc, eq, isNull, lt } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { markInvoiceSent, recordPayment, voidInvoice } from "@/lib/actions/office";
-import { createStandaloneInvoice } from "@/lib/actions/money";
+import { bulkInvoiceReminders, createStandaloneInvoice } from "@/lib/actions/money";
 import {
   Badge,
   Button,
@@ -138,11 +138,31 @@ export default async function InvoicesPage({ searchParams }: { searchParams: { s
         <EmptyState title="No invoices here" hint={statusFilter ? `Nothing in ${statusLabel(statusFilter)}.` : "Invoices appear as jobs and projects are billed."} />
       ) : (
         <Card>
+          {/* M6: bulk payment reminders — approval-gated, dedupe-safe */}
+          {can(session.role, "invoices.create") ? (
+            <form id="bulk-inv" action={bulkInvoiceReminders} className="flex items-center gap-2 border-b border-slate-100 px-4 py-2">
+              <Button type="submit" size="sm" variant="secondary" title="Queues one payment reminder per selected open invoice for approval">
+                ✉️ Queue reminders for selected
+              </Button>
+              <span className="text-[11px] text-slate-400">Tick open invoices below — reminders wait in the Approvals queue.</span>
+            </form>
+          ) : null}
           <Table>
-            <THead cols={["Number", "Customer", "Ref", "Issued", "Due", "Total", "Paid", "Balance", "Status", "Actions"]} />
+            <THead cols={["", "Number", "Customer", "Ref", "Issued", "Due", "Total", "Paid", "Balance", "Status", "Actions"]} />
             <tbody>
               {rows.map(({ inv, total, paid, balance }) => (
                 <TRow key={inv.id} className={inv.status === "OVERDUE" ? "bg-red-50/60" : undefined}>
+                  <TCell>
+                    <input
+                      type="checkbox"
+                      name="ids"
+                      value={inv.id}
+                      form="bulk-inv"
+                      aria-label={`Select ${inv.number}`}
+                      className="h-4 w-4"
+                      disabled={!UNPAID.has(inv.status)}
+                    />
+                  </TCell>
                   <TCell>
                     <Link href={`/invoices/${inv.id}`} className="font-medium text-blue-700 hover:underline">
                       {inv.number}

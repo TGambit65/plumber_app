@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { t, withTenant } from "@/db";
 import { desc, eq, gte } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
@@ -32,7 +33,11 @@ function isoWeek(d: Date): { key: string; label: string } {
   return { key: `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`, label: `W${week}` };
 }
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: { from?: string; to?: string };
+}) {
   const session = await requireSession();
   if (!can(session.role, "reports.company")) {
     return (
@@ -51,6 +56,12 @@ export default async function DashboardPage() {
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const days30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const weeks8Start = new Date(now.getTime() - 8 * 7 * 24 * 60 * 60 * 1000);
+
+  // M6: optional custom date range for the revenue tile + CSV export.
+  const isDate = (v?: string) => Boolean(v && /^\d{4}-\d{2}-\d{2}$/.test(v));
+  const rangeFrom = isDate(searchParams.from) ? new Date(searchParams.from!) : monthStart;
+  const rangeTo = isDate(searchParams.to) ? new Date(`${searchParams.to}T23:59:59`) : now;
+  const customRange = isDate(searchParams.from) || isDate(searchParams.to);
 
   const [payments, invoices, leads, jobs, users, timeEntries, photos, reviews, estimates, followUps, projects, membershipRows, auditRows] =
     await withTenant(session.organizationId, (tx) =>
@@ -80,7 +91,7 @@ export default async function DashboardPage() {
 
   // ── KPIs ──
   const revenueThisMonth = payments
-    .filter((p) => new Date(p.receivedAt) >= monthStart)
+    .filter((p) => new Date(p.receivedAt) >= rangeFrom && new Date(p.receivedAt) <= rangeTo)
     .reduce((s, p) => s + p.amountCents, 0);
 
   const invComputed = invoices.map((inv) => {
@@ -187,11 +198,42 @@ export default async function DashboardPage() {
 
   return (
     <div>
-      <PageHeader title="Company dashboard" subtitle="Owner overview — revenue, pipeline, crew performance, AR health." />
+      <PageHeader
+        title="Company dashboard"
+        subtitle="Owner overview — revenue, pipeline, crew performance, AR health."
+        action={
+          <form method="GET" action="/dashboard" className="flex flex-wrap items-end gap-1.5">
+            <input
+              type="date"
+              name="from"
+              defaultValue={isDate(searchParams.from) ? searchParams.from : ""}
+              aria-label="From date"
+              className="h-8 rounded-lg border border-slate-300 px-2 text-xs"
+            />
+            <input
+              type="date"
+              name="to"
+              defaultValue={isDate(searchParams.to) ? searchParams.to : ""}
+              aria-label="To date"
+              className="h-8 rounded-lg border border-slate-300 px-2 text-xs"
+            />
+            <button type="submit" className="h-8 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
+              Apply range
+            </button>
+            <a
+              href={`/api/export/payments?from=${rangeFrom.toISOString().slice(0, 10)}&to=${rangeTo.toISOString().slice(0, 10)}`}
+              className="h-8 rounded-lg bg-slate-800 px-2.5 text-xs font-medium leading-8 text-white hover:bg-slate-700"
+              title="CSV of every payment in the range — invoice, customer, method, reference"
+            >
+              ⬇ Export CSV
+            </a>
+          </form>
+        }
+      />
 
       {/* KPI tiles */}
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Revenue this month" value={money(revenueThisMonth)} tone="good" hint="payments received" />
+        <Stat label={customRange ? "Revenue in range" : "Revenue this month"} value={money(revenueThisMonth)} tone="good" hint="payments received" />
         <Stat label="Open AR" value={money(openAR)} tone={openAR > 0 ? "warn" : "good"} hint="unpaid invoice balances" />
         <Stat label="Pipeline value" value={money(pipelineValue)} hint="open leads" />
         <Stat label="Close rate" value={`${closeRate}%`} hint={`${won} won / ${lost} lost`} />
@@ -229,7 +271,9 @@ export default async function DashboardPage() {
                   {techRows.map((r) => (
                     <TRow key={r.tech.id}>
                       <TCell>
-                        <span className="font-medium">{r.tech.name}</span>
+                        <Link href={`/jobs?tech=${r.tech.id}`} className="font-medium text-blue-700 hover:underline" title="Drill through to this tech's jobs">
+                          {r.tech.name}
+                        </Link>
                       </TCell>
                       <TCell>{r.completed30}</TCell>
                       <TCell className="tabular-nums">{r.hours.toFixed(1)}h</TCell>
@@ -254,7 +298,9 @@ export default async function DashboardPage() {
                   {salesRows.map((r) => (
                     <TRow key={r.user.id}>
                       <TCell>
-                        <span className="font-medium">{r.user.name}</span>
+                        <Link href={`/commissions?user=${r.user.id}`} className="font-medium text-blue-700 hover:underline" title="Drill through to this rep's commissions">
+                          {r.user.name}
+                        </Link>
                       </TCell>
                       <TCell>
                         <span className="text-emerald-600">{r.won}</span> / <span className="text-red-600">{r.lost}</span>

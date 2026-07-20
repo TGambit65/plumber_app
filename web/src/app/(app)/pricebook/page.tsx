@@ -20,7 +20,8 @@ import {
 } from "@/components/ui";
 import { money } from "@/lib/format";
 import { clsx } from "@/lib/clsx";
-import { addPriceBookItem, togglePriceBookItemActive, updatePriceBookItem } from "@/lib/actions/shared";
+import { addPriceBookItem, importPriceBookCsv, togglePriceBookItemActive, updatePriceBookItem } from "@/lib/actions/shared";
+import { Textarea } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -197,6 +198,21 @@ export default async function PriceBookPage({
                               </Button>
                             </form>
                           </div>
+                          {/* M6: name/code/category/description/labor finally editable */}
+                          <details className="mt-1">
+                            <summary className="cursor-pointer rounded px-1 py-0.5 text-[11px] font-medium text-blue-600 hover:bg-blue-50">✏️ Edit details</summary>
+                            <form action={updatePriceBookItem} className="mt-1.5 grid w-64 gap-1.5 rounded-lg border border-slate-200 p-2.5">
+                              <input type="hidden" name="id" value={item.id} />
+                              <input type="hidden" name="cost" value={(item.unitCostCents / 100).toFixed(2)} />
+                              <input type="hidden" name="price" value={(item.unitPriceCents / 100).toFixed(2)} />
+                              <Input name="code" required defaultValue={item.code} aria-label="Code" className="h-8 text-xs" />
+                              <Input name="name" required defaultValue={item.name} aria-label="Name" className="h-8 text-xs" />
+                              <Input name="category" required defaultValue={item.category} list="pb-categories" aria-label="Category" className="h-8 text-xs" />
+                              <Input name="description" defaultValue={item.description ?? ""} placeholder="Description" aria-label="Description" className="h-8 text-xs" />
+                              <Input name="laborHours" type="number" step="0.25" min={0} defaultValue={item.laborHours ?? ""} placeholder="Labor hrs" aria-label="Labor hours" className="h-8 text-xs" />
+                              <Button type="submit" size="sm" variant="secondary">Save details</Button>
+                            </form>
+                          </details>
                         </TCell>
                       ) : null}
                     </TRow>
@@ -244,6 +260,37 @@ export default async function PriceBookPage({
                 </Field>
               </div>
               <Button type="submit">Add to price book</Button>
+            </form>
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {/* M6: CSV round-trip — export the book, edit in a spreadsheet, paste back */}
+      {canEdit ? (
+        <Card>
+          <CardHeader
+            title="📄 CSV import / export"
+            subtitle="Columns: code,name,category,cost,price,laborHours — upserts by code"
+            action={
+              <a href="/api/export/pricebook" className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                ⬇ Download CSV
+              </a>
+            }
+          />
+          <CardBody>
+            <form action={importPriceBookCsv} className="space-y-2">
+              <Field label="Paste CSV rows (header + # comment lines are ignored)">
+                <Textarea
+                  name="csv"
+                  rows={5}
+                  required
+                  placeholder={"code,name,category,cost,price,laborHours\nWH-50G,50-gal Gas Water Heater — Install,Water Heaters,780,2150,4"}
+                  className="font-mono text-xs"
+                />
+              </Field>
+              <Button type="submit" size="sm" variant="secondary">
+                ⬆ Import rows
+              </Button>
             </form>
           </CardBody>
         </Card>

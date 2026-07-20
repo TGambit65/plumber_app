@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { bulkArchiveLeads } from "@/lib/actions/sales";
 import { t, withTenant } from "@/db";
 import { desc, eq, isNull, isNotNull } from "drizzle-orm";
 import { requireSession } from "@/lib/auth";
@@ -138,11 +139,23 @@ export default async function LeadsPage({
           </ul>
           {/* Desktop: full table */}
           <div className="hidden md:block">
+          {/* M6: bulk archive for junk-lead sweeps */}
+          {searchParams.archived !== "1" ? (
+            <form id="bulk-leads" action={bulkArchiveLeads} className="flex items-center gap-2 border-b border-slate-100 px-4 py-2">
+              <button type="submit" className={buttonClass("secondary", "sm")} title="Archives every selected lead — restore any time from 📦 Show archived">
+                📦 Archive selected
+              </button>
+              <span className="text-[11px] text-slate-400">Tick junk or duplicate leads below and sweep them in one go.</span>
+            </form>
+          ) : null}
           <Table>
-            <THead cols={["Lead", "Stage", "Source", "Contact", "Est. value", "Rep", "SLA"]} />
+            <THead cols={["", "Lead", "Stage", "Source", "Contact", "Est. value", "Rep", "SLA"]} />
             <tbody>
               {leads.map((l) => (
                 <TRow key={l.id}>
+                  <TCell>
+                    <input type="checkbox" name="ids" value={l.id} form="bulk-leads" aria-label={`Select ${l.title}`} className="h-4 w-4" />
+                  </TCell>
                   <TCell>
                     <Link href={`/leads/${l.id}`} className="font-medium text-slate-900 hover:text-blue-600">
                       {l.title}

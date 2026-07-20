@@ -1,6 +1,6 @@
 # Management Functionality Plan — full CRUD/lifecycle across every side-menu screen
 
-**Status: IN PROGRESS** — M1 ✅ · M2 ✅ · M3 ✅ · M4 ✅ · M5 ✅ DONE · M6 (optional polish) pending.
+**Status: ✅ COMPLETE** — all six phases (M1–M6) shipped and verified end-to-end.
 
 ## 1. The problem
 
@@ -279,7 +279,21 @@ assertions.
   `updateOrganization` action for those + name + brandPrimary (brand color
   already feeds theming). Slug stays immutable (it's in webhook/feed URLs).
 
-### Phase M6 — Polish & cross-cutting (optional, post-pilot)
+### Phase M6 — Polish & cross-cutting ✅ DONE
+
+Shipped: price book detail editing (name/code/category/description/labor —
+code-collision guarded) + CSV round-trip (export at `/api/export/pricebook`,
+paste-import upserting by code with a per-line error report); dashboard
+custom date range driving the revenue tile + payments CSV export
+(`/api/export/payments?from&to`) + scoreboard drill-through links (tech →
+their jobs, rep → their commissions); earnings "⚠ Dispute" per entry that
+pings every commissions manager with full context (audited); bulk
+operations — multi-select archive on the jobs list (closed only; open rows
+can't be ticked), junk-lead sweeps on the leads list, and bulk payment
+reminders on the invoices list (approval-gated, dedupe-safe); and the KB
+"📦 Show unpublished" view completing the archived-filter sweep.
+Verified: 15-check Playwright e2e (`verify-m6.mjs`) with DB + audit
+assertions, incl. CSV round-trip fidelity and export-vs-DB row counts.
 
 - "Show archived" filter chips on every list; restore actions.
 - Dashboard: date-range picker + CSV export; drill-through links.

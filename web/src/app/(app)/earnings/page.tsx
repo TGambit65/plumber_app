@@ -3,6 +3,7 @@ import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { and, asc, desc, eq, gte, lt, notInArray } from "drizzle-orm";
 import { fmtDate, fmtTime, money } from "@/lib/format";
+import { disputeCommissionEntry } from "@/lib/actions/shared";
 import {
   Badge,
   Card,
@@ -131,7 +132,20 @@ export default async function EarningsPage() {
                     <TCell>
                       <Badge tone={commissionTone[e.status]}>{e.status.charAt(0) + e.status.slice(1).toLowerCase()}</Badge>
                     </TCell>
-                    <TCell className="whitespace-nowrap text-slate-500">{fmtDate(e.createdAt)}</TCell>
+                    <TCell className="whitespace-nowrap text-slate-500">
+                      {fmtDate(e.createdAt)}
+                      {/* M6: dispute an entry — pings every commissions manager with context */}
+                      {e.status !== "PAID" ? (
+                        <details className="mt-0.5">
+                          <summary className="cursor-pointer text-[11px] font-medium text-amber-700 hover:underline">⚠ Dispute…</summary>
+                          <form action={disputeCommissionEntry} className="mt-1 flex items-end gap-1.5">
+                            <input type="hidden" name="entryId" value={e.id} />
+                            <input name="reason" required placeholder="what's wrong?" aria-label="Dispute reason" className="h-8 w-40 rounded-md border border-slate-300 px-2 text-xs" />
+                            <button type="submit" className="h-8 rounded-md bg-amber-600 px-2 text-xs font-medium text-white hover:bg-amber-700">Send</button>
+                          </form>
+                        </details>
+                      ) : null}
+                    </TCell>
                   </TRow>
                 ))}
               </tbody>

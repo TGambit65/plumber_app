@@ -4,8 +4,9 @@ import { t, withTenant } from "@/db";
 import { requireSession } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { audit, logActivity, notify } from "@/lib/actions/helpers";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { money } from "@/lib/format";
 import { redirect } from "next/navigation";
 
 const str = (v: FormDataEntryValue | null) => String(v ?? "").trim();
@@ -406,12 +407,30 @@ export async function updatePriceBookItem(formData: FormData) {
   const unitPriceCents = dollarsToCents(formData.get("price"));
   const unitCostCents = dollarsToCents(formData.get("cost"));
 
+  // M6: when the form carries detail fields, edit them too (a typo'd name or
+  // wrong category is no longer stuck forever). Inline price forms omit them.
+  const name = str(formData.get("name"));
+  const code = str(formData.get("code"));
+  const laborRaw = str(formData.get("laborHours"));
+
   const before = await withTenant(session.organizationId, async (tx) => {
     const [row] = await tx.select().from(t.priceBookItems).where(eq(t.priceBookItems.id, id));
     if (!row) return null;
+    if (code && code !== row.code) {
+      const [dupe] = await tx.select().from(t.priceBookItems).where(eq(t.priceBookItems.code, code));
+      if (dupe) throw new Error(`Code "${code}" is already used by "${dupe.name}"`);
+    }
     await tx
       .update(t.priceBookItems)
-      .set({ unitPriceCents, unitCostCents })
+      .set({
+        unitPriceCents,
+        unitCostCents,
+        ...(name ? { name } : {}),
+        ...(code ? { code } : {}),
+        ...(str(formData.get("category")) ? { category: str(formData.get("category")) } : {}),
+        ...(formData.has("description") ? { description: str(formData.get("description")) || null } : {}),
+        ...(formData.has("laborHours") ? { laborHours: laborRaw ? Number(laborRaw) : null } : {}),
+      })
       .where(eq(t.priceBookItems.id, id));
     return row;
   });
@@ -422,8 +441,110 @@ export async function updatePriceBookItem(formData: FormData) {
     priceTo: unitPriceCents,
     costFrom: before.unitCostCents,
     costTo: unitCostCents,
+    detailsEdited: Boolean(name),
   });
   revalidatePath("/pricebook");
+}
+
+/** M6: CSV import — paste rows `code,name,category,cost,price,laborHours`.
+ *  Upserts by code (existing rows update; new codes insert). Lines starting
+ *  with # or a header row are ignored. */
+export async function importPriceBookCsv(formData: FormData) {
+  const session = await requireSession();
+  if (!can(session.role, "pricebook.edit")) throw new Error("Not allowed");
+  const csv = str(formData.get("csv"));
+  if (!csv) return;
+
+  const summary = await withTenant(session.organizationId, async (tx) => {
+    const existing = await tx.select().from(t.priceBookItems);
+    const byCode = new Map(existing.map((r) => [r.code.toLowerCase(), r]));
+    let created = 0;
+    let updated = 0;
+    const errors: string[] = [];
+    const lines = csv.split(/\r?\n/);
+    for (let n = 0; n < lines.length; n++) {
+      const line = lines[n].trim();
+      if (!line || line.startsWith("#") || /^code\s*,/i.test(line)) continue;
+      const cols = line.split(",").map((c) => c.trim());
+      const [code, name, category, cost, price, labor] = cols;
+      if (!code || !name || !category || !price) {
+        errors.push(`line ${n + 1}: needs code,name,category,cost,price[,laborHours]`);
+        continue;
+      }
+      const priceCents = Math.round(Number(price.replace(/[$\s]/g, "")) * 100);
+      const costCents = cost ? Math.round(Number(cost.replace(/[$\s]/g, "")) * 100) : 0;
+      if (!Number.isFinite(priceCents)) {
+        errors.push(`line ${n + 1}: bad price "${price}"`);
+        continue;
+      }
+      const laborHours = labor && Number.isFinite(Number(labor)) ? Number(labor) : null;
+      const hit = byCode.get(code.toLowerCase());
+      if (hit) {
+        await tx
+          .update(t.priceBookItems)
+          .set({ name, category, unitCostCents: costCents, unitPriceCents: priceCents, laborHours })
+          .where(eq(t.priceBookItems.id, hit.id));
+        updated++;
+      } else {
+        await tx
+          .insert(t.priceBookItems)
+          .values({ code, name, category, unitCostCents: costCents, unitPriceCents: priceCents, laborHours });
+        created++;
+      }
+    }
+    return { created, updated, errors };
+  });
+
+  await audit(session.userId, "PRICEBOOK_CSV_IMPORT", "PriceBookItem", undefined, summary);
+  await notify(
+    session.userId,
+    `📗 Price book import: ${summary.created} added, ${summary.updated} updated`,
+    summary.errors.length ? `⚠️ ${summary.errors.length} line(s) skipped: ${summary.errors.slice(0, 3).join("; ")}` : "All rows imported cleanly.",
+    "/pricebook"
+  );
+  revalidatePath("/pricebook");
+}
+
+/** M6: a tech disputes a commission entry — pings every commissions manager
+ *  with full context instead of forcing a hallway conversation. */
+export async function disputeCommissionEntry(formData: FormData) {
+  const session = await requireSession();
+  const entryId = str(formData.get("entryId"));
+  const reason = str(formData.get("reason"));
+  if (!entryId) return;
+  if (!reason) throw new Error("Tell us what's wrong with the entry");
+
+  const entry = await withTenant(session.organizationId, async (tx) => {
+    const found = await tx.query.commissionEntries.findFirst({ where: eq(t.commissionEntries.id, entryId) });
+    if (!found) throw new Error("Entry not found");
+    if (found.userId !== session.userId) throw new Error("You can only dispute your own entries");
+    return found;
+  });
+
+  const managers = await withTenant(session.organizationId, (tx) =>
+    tx
+      .select({ id: t.users.id })
+      .from(t.users)
+      .where(and(inArray(t.users.role, ["OFFICE", "ADMIN"]), eq(t.users.active, true)))
+  );
+  for (const m of managers) {
+    await notify(
+      m.id,
+      `⚠️ Commission disputed by ${session.name}`,
+      `"${entry.description}" (${money(entry.amountCents)}, ${entry.period}) — ${reason}`,
+      `/commissions?user=${session.userId}`
+    );
+  }
+  await audit(session.userId, "COMMISSION_DISPUTED", "CommissionEntry", entryId, {
+    amountCents: entry.amountCents,
+    reason,
+  });
+  await logActivity({
+    kind: "SYSTEM",
+    body: `Commission entry disputed by ${session.name}: ${reason}`,
+    userId: session.userId,
+  });
+  revalidatePath("/earnings");
 }
 
 export async function togglePriceBookItemActive(formData: FormData) {
