@@ -46,7 +46,7 @@ Two tenants are seeded to demonstrate isolation (see Multi-tenancy below):
 This app is the multi-tenant **Trade-Ops** core (see
 [`../docs/strategy/architecture.md`](../docs/strategy/architecture.md)). Every
 tenant-owned row carries `organization_id`; isolation is enforced by Postgres
-**FORCE RLS on all 41 tenant tables** via the `withTenant(orgId, …)` primitive
+**FORCE RLS on all 52 tenant tables** via the `withTenant(orgId, …)` primitive
 (login uses the `auth_user_by_email()` SECURITY DEFINER bootstrap). Verified
 end-to-end: neither org can see the other's customers, jobs, invoices, price
 book, messages, team, SOPs, or search results, and unscoped connections read

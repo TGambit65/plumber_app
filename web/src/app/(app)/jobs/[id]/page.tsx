@@ -221,7 +221,7 @@ export default async function JobDetailPage({ params }: { params: { id: string }
                       {group.photos.map((p) => (
                         <figure key={p.id} className="overflow-hidden rounded-lg border border-slate-200">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={p.url} alt={p.caption ?? group.kind} className="h-28 w-full bg-slate-100 object-cover" />
+                          <img src={`/api/photos/${p.id}?v=thumb`} alt={p.caption ?? group.kind} className="h-28 w-full bg-slate-100 object-cover" />
                           <figcaption className="px-2 py-1.5 text-[11px] text-slate-500">
                             {p.caption ?? "—"} · {p.takenBy.name.split(" ")[0]}, {fmtTime(p.takenAt)}
                           </figcaption>

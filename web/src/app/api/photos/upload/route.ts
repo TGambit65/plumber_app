@@ -5,21 +5,24 @@ import sharp from "sharp";
 import { t, withTenant } from "@/db";
 import { getSession } from "@/lib/auth";
 import { audit } from "@/lib/actions/helpers";
+import { storageKey, uploadRoot } from "@/lib/photo-storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const PHOTO_KINDS = new Set(["BEFORE", "DURING", "AFTER", "PROBLEM", "COVERUP"]);
 const MAX_BYTES = 15 * 1024 * 1024; // 15 MB
-const UPLOAD_ROOT = path.join(process.cwd(), "public", "uploads");
 
 /**
  * Photo upload — completes the offline photo pipeline (spec §5).
  * The offline client queues captures locally and POSTs them here (multipart)
  * when connectivity returns; this stores the original + a thumbnail and records
- * an org-scoped job_photos row. Org isolation is enforced via withTenant/RLS;
- * the file lands under public/uploads/<orgId>/ so it can never be reached from
- * another tenant's job (the DB row is the only index and it's RLS-filtered).
+ * an org-scoped job_photos row.
+ *
+ * Files are written OUTSIDE the web root (see lib/photo-storage.ts) and are
+ * readable only through GET /api/photos/[id], which re-checks the session and
+ * resolves the row under RLS. The row is the capability — knowing a path grants
+ * nothing. The response returns those API URLs, never a filesystem location.
  */
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -50,7 +53,7 @@ export async function POST(req: NextRequest) {
   if (!job) return NextResponse.json({ error: "job not found" }, { status: 404 });
 
   const input = Buffer.from(await file.arrayBuffer());
-  const dir = path.join(UPLOAD_ROOT, session.organizationId);
+  const dir = path.join(uploadRoot(), session.organizationId);
   await fs.mkdir(dir, { recursive: true });
 
   // Re-encode to JPEG (normalizes + strips EXIF), plus a small thumbnail.
@@ -67,17 +70,21 @@ export async function POST(req: NextRequest) {
     await fs.writeFile(path.join(dir, fullName), input);
   }
 
-  const url = `/uploads/${session.organizationId}/${fullName}`;
-  const thumbUrl = `/uploads/${session.organizationId}/${thumbName}`;
+  // Stored value is a storage key, not a servable path. Nothing outside
+  // GET /api/photos/[id] knows how to turn it back into bytes.
+  const key = storageKey(session.organizationId, fullName);
 
   const [row] = await withTenant(session.organizationId, (tx) =>
     tx
       .insert(t.jobPhotos)
-      .values({ jobId, kind: kind as "BEFORE" | "DURING" | "AFTER" | "PROBLEM" | "COVERUP", url, caption, takenById: session.userId })
+      .values({ jobId, kind: kind as "BEFORE" | "DURING" | "AFTER" | "PROBLEM" | "COVERUP", url: key, caption, takenById: session.userId })
       .returning()
   );
 
   await audit(session.userId, "UPLOAD_PHOTO", "JobPhoto", row.id, { jobId, kind, bytes: file.size });
+
+  const url = `/api/photos/${row.id}`;
+  const thumbUrl = `/api/photos/${row.id}?v=thumb`;
 
   return NextResponse.json({ localId, photo: { id: row.id, jobId, kind, url, thumbUrl, caption } }, { status: 201 });
 }

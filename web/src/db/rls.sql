@@ -1,5 +1,11 @@
 -- Row-Level Security — tenant isolation spine.
 --
+-- Abort on the first error. Without this, psql happily continues past a failed
+-- statement and exits 0, which previously let this script half-apply: the
+-- REVOKEs below landed, the matching GRANTs did not, and the database came up
+-- looking fine while login was impossible. Never remove this line.
+\set ON_ERROR_STOP on
+--
 -- Every code path touching these tables runs through withTenant() (which sets
 -- app.current_org). FORCE is required because the app's DB role owns the
 -- tables and would otherwise bypass policies. Fail-safe: with no tenant
@@ -76,7 +82,6 @@ AS $fn$
 $fn$;
 
 REVOKE ALL ON FUNCTION auth_user_by_email(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION auth_user_by_email(text) TO plumber;
 
 -- Punchout cart return: the supplier's BrowserFormPost arrives WITHOUT a user
 -- session (cross-site POST strips sameSite cookies), so the unguessable
@@ -94,7 +99,6 @@ AS $fn$
 $fn$;
 
 REVOKE ALL ON FUNCTION punchout_session_by_cookie(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION punchout_session_by_cookie(text) TO plumber;
 
 -- ICS feed fetch: calendar clients subscribe with NO session — the unguessable
 -- feed token is the capability. This is the ONLY global read of
@@ -110,7 +114,6 @@ AS $fn$
 $fn$;
 
 REVOKE ALL ON FUNCTION calendar_feed_by_token(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION calendar_feed_by_token(text) TO plumber;
 
 -- C1: public proposal page — the customer opens their estimate with NO login;
 -- the unguessable token is the capability. ONLY global read of estimates; the
@@ -126,7 +129,6 @@ AS $fn$
 $fn$;
 
 REVOKE ALL ON FUNCTION estimate_by_public_token(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION estimate_by_public_token(text) TO plumber;
 
 -- C1: public pay page — same capability pattern for invoices.
 CREATE OR REPLACE FUNCTION invoice_by_public_token(p_token text)
@@ -140,4 +142,63 @@ AS $fn$
 $fn$;
 
 REVOKE ALL ON FUNCTION invoice_by_public_token(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION invoice_by_public_token(text) TO plumber;
+
+-- ── Grant the SECURITY DEFINER capabilities to the application role ─────────
+--
+-- These five functions are the only sanctioned cross-tenant reads, and every
+-- one of them is load-bearing: auth_user_by_email IS login. They are REVOKEd
+-- from PUBLIC above, so the app role must be granted EXECUTE explicitly or the
+-- application cannot start a session at all.
+--
+-- The role name is DISCOVERED, not hardcoded. This file previously granted to
+-- a literal role named "plumber"; any deployment whose role was named anything
+-- else (staging, CI, a customer, a new dev machine) got "permission denied for
+-- function auth_user_by_email" at login — after this script had already exited
+-- 0. We grant to whoever owns the tables, which is the app's role by
+-- construction, since the app created them.
+DO $$
+DECLARE
+  app_role text;
+  fn text;
+BEGIN
+  SELECT tableowner INTO app_role
+  FROM pg_tables
+  WHERE schemaname = 'public' AND tablename = 'users';
+
+  IF app_role IS NULL THEN
+    RAISE EXCEPTION 'Cannot determine the application role: table public.users not found. Run the schema migration (npm run db:push) before this script.';
+  END IF;
+
+  FOREACH fn IN ARRAY ARRAY[
+    'auth_user_by_email',
+    'punchout_session_by_cookie',
+    'calendar_feed_by_token',
+    'estimate_by_public_token',
+    'invoice_by_public_token'
+  ] LOOP
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %I(text) TO %I', fn, app_role);
+  END LOOP;
+
+  RAISE NOTICE 'Granted EXECUTE on 5 SECURITY DEFINER functions to role %', app_role;
+END $$;
+
+-- Fail loudly if any capability did not land. A silent half-grant here is
+-- indistinguishable from a working install until someone tries to log in.
+DO $$
+DECLARE
+  app_role text;
+  fn text;
+BEGIN
+  SELECT tableowner INTO app_role FROM pg_tables WHERE schemaname = 'public' AND tablename = 'users';
+  FOREACH fn IN ARRAY ARRAY[
+    'auth_user_by_email',
+    'punchout_session_by_cookie',
+    'calendar_feed_by_token',
+    'estimate_by_public_token',
+    'invoice_by_public_token'
+  ] LOOP
+    IF NOT has_function_privilege(app_role, format('%I(text)', fn), 'EXECUTE') THEN
+      RAISE EXCEPTION 'Role % lacks EXECUTE on %() — the application would fail at runtime.', app_role, fn;
+    END IF;
+  END LOOP;
+END $$;

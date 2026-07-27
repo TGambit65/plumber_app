@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  web:
+    name: Lint · typecheck · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+        env:
+          # Build-time only; no database is contacted during `next build`.
+          DATABASE_URL: postgres://ci:ci@127.0.0.1:5432/ci
+          SESSION_SECRET: ci-session-secret-not-used-at-runtime-000000
+
+  database:
+    name: Schema · RLS coverage
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # The application role is deliberately NOT named "plumber".
+      #
+      # rls.sql used to hardcode `GRANT EXECUTE ... TO plumber`, so every
+      # deployment whose role was named anything else came up with the REVOKEs
+      # applied and the GRANTs missing — auth_user_by_email unreachable, i.e.
+      # nobody could log in — while psql still exited 0. Pinning CI to a
+      # different role name is what makes that class of bug fail here instead of
+      # in front of a customer.
+      APP_DB_ROLE: tradeops_ci
+      APP_DB_PASSWORD: tradeops_ci
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create the application role and database
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<SQL
+          CREATE ROLE ${APP_DB_ROLE} LOGIN PASSWORD '${APP_DB_PASSWORD}';
+          CREATE DATABASE tradeops OWNER ${APP_DB_ROLE};
+          SQL
+
+      - name: Push schema as the application role
+        run: npx drizzle-kit push --force
+        env:
+          DATABASE_URL: postgres://tradeops_ci:tradeops_ci@127.0.0.1:5432/tradeops
+
+      - name: Apply RLS policies and capability grants (superuser)
+        # rls.sql sets ON_ERROR_STOP itself; -v here is belt and braces so a
+        # partial apply can never be reported as success again.
+        run: psql -h 127.0.0.1 -U postgres -d tradeops -v ON_ERROR_STOP=1 -f src/db/rls.sql
+
+      - name: Verify every tenant table is RLS-enabled, forced, and policied
+        run: npx tsx src/db/verify-rls.ts
+        env:
+          DATABASE_URL: postgres://tradeops_ci:tradeops_ci@127.0.0.1:5432/tradeops
+
+      - name: Verify the application role holds every SECURITY DEFINER capability
+        # Without these five grants the app cannot log a user in. Assert them
+        # explicitly rather than trusting that rls.sql ran clean.
+        run: |
+          psql -h 127.0.0.1 -U postgres -d tradeops -v ON_ERROR_STOP=1 <<SQL
+          DO \$\$
+          DECLARE fn text;
+          BEGIN
+            FOREACH fn IN ARRAY ARRAY[
+              'auth_user_by_email','punchout_session_by_cookie','calendar_feed_by_token',
+              'estimate_by_public_token','invoice_by_public_token'
+            ] LOOP
+              IF NOT has_function_privilege('${APP_DB_ROLE}', format('%I(text)', fn), 'EXECUTE') THEN
+                RAISE EXCEPTION 'Role ${APP_DB_ROLE} lacks EXECUTE on %()', fn;
+              END IF;
+            END LOOP;
+            RAISE NOTICE 'All 5 capability grants present.';
+          END \$\$;
+          SQL
+
+      - name: Seed the four demo tenants, then re-verify coverage
+        # The seed exercises ~220 withTenant() write paths across every module,
+        # so it doubles as the broadest smoke test we have of the tenancy spine.
+        run: |
+          npx tsx src/db/seed.ts
+          npx tsx src/db/verify-rls.ts
+        env:
+          DATABASE_URL: postgres://tradeops_ci:tradeops_ci@127.0.0.1:5432/tradeops
+          SESSION_SECRET: ci-session-secret-000000000000000000000000
+          APP_ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000

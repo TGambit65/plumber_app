@@ -54,7 +54,7 @@ When principles conflict, prefer higher on this list (the "if in doubt" order):
 ### Conversion status: ✅ COMPLETE — RLS ON everywhere
 
 All modules (~35 files, ~220 query sites) run through `withTenant`; **FORCE RLS
-is enabled on all 41 tenant-owned tables**, including `users`. The only tables
+is enabled on all 52 tenant-owned tables**, including `users`. The only tables
 without RLS are the globals: `organizations` (the tenant roots) and
 `trade_packs` (shared catalog).
 
@@ -128,7 +128,7 @@ conversion completes:
   `withTenant` + 2-org seed + KB module converted & isolation-verified + session
   org + org-aware shell.
 - **Phase 2 (done):** full tenancy conversion — every module on `withTenant`,
-  FORCE RLS on all 41 tenant tables (incl. users via the auth-function
+  FORCE RLS on all 52 tenant tables (incl. users via the auth-function
   bootstrap), mutation + isolation verification for both seeded orgs.
 - **Phase 3 (done):** typed connector interface + claims core +
   compliance/inspection engine:
@@ -166,7 +166,8 @@ conversion completes:
     resolving any `local:` job ID to its server ID first. `/api/photos/upload`
     verifies the job belongs to the caller's org **before** writing anything,
     re-encodes to JPEG + thumbnail via `sharp`, stores under
-    `public/uploads/<orgId>/`, inserts an org-scoped `jobPhotos` row, and audits
+    `$UPLOADS_DIR/<orgId>/` (OUTSIDE the web root), inserts an org-scoped
+    `jobPhotos` row storing a storage key rather than a servable path, and audits
     `UPLOAD_PHOTO`. The sync chip counts queued photos as pending. Verified:
     captured offline → queued → survived reload → auto-uploaded on reconnect
     (server 1→2, file on disk); cross-tenant upload attempt correctly 404'd.
@@ -277,7 +278,7 @@ All previously listed depth items are now DONE and verified:
 - **RLS-coverage guard** (`src/db/verify-rls.ts`, `npm run db:verify-rls`):
   auto-discovers every table carrying `organization_id` and asserts each has
   row security ENABLED + FORCED + a policy. Fails (exit 1) if a new tenant
-  table is ever added without RLS. Currently green across all 51 tenant tables;
+  table is ever added without RLS. Currently green across all 52 tenant tables;
   the two intentional non-RLS tables (organizations, trade_packs) have no
   org_id and are correctly out of scope.
 

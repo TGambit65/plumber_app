@@ -352,7 +352,7 @@ export default async function ClaimDetailPage({ params }: { params: { id: string
                   {photos.map((p) => (
                     <figure key={p.id} className="overflow-hidden rounded-lg border border-slate-200">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={p.url} alt={p.caption ?? p.kind} className="h-28 w-full bg-slate-100 object-cover" />
+                      <img src={`/api/photos/${p.id}?v=thumb`} alt={p.caption ?? p.kind} className="h-28 w-full bg-slate-100 object-cover" />
                       <figcaption className="space-y-0.5 px-2 py-1.5">
                         <div className="flex items-center gap-1.5">
                           <Badge tone={p.kind === "PROBLEM" ? "red" : p.kind === "AFTER" ? "green" : "slate"}>
